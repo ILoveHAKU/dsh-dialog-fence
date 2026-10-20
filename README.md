@@ -48,41 +48,74 @@ rules/state.json                      ← 只存开关（全局 + 各会话）�
 | 会话按钮 | 会话右上角工具区「围栏」，带规则条数徽标 | 打开本会话规则浮层 |
 | 规则浮层 | 右下角面板 | 逐条查看 / **单行内联编辑**（无 textarea）/ 删除 / 新增 / 启停 / 清空 |
 | **设置页** | 设置左栏 → **「对话围栏」**（与「通知提醒」「模型」同级） | **全局总开关** + 所有已配置会话的清单（启用状态、规则条数） |
-| **插件页卡片** | 左侧「插件」→ **官方** 分组 → 「对话围栏」卡片 | 卡片一行摘要；点开就是同一份配置界面 |
+| **插件详情页配置区** | 左侧「插件」→ **已安装** → **dsh-dialog-fence** → 详情页（包描述与行之间） | 同一份配置界面 |
 | 插件页标签页 | 设置 → **内置插件** → 「对话围栏」一页 | 同一份配置界面（老入口，仍在） |
 
 五处界面写的是同一份文件：面板改完 → 文件落盘 → 下一轮装配时重新读取 → 生效。没有任何状态分叉。
 
-> 说明：左侧「插件」页的官方分组是按客户端插件包生成的，卡片由 `plugins.item` 槽位贡献；
-> 插件管理列表（`plugin_manager.list_bundles`）只列 profile 里真实安装的包，所以用
-> `file:///` 挂载安装时那里看不到 dialog-fence —— 这不影响配置入口。
+> 为什么卡片在「已安装」而不是「官方」：`plugins.item` 槽位的语义被写死为「官方分组里的一张卡片」，
+> 改 id / order 都改不到别处；`plugins.bundle.config` 才属于「组合包自己的配置」，
+> 以 **npm 包名** 为 key 渲染在该 bundle 详情页的描述与行之间。
+> 0.5.0 起本插件按组合包安装（profile `dependencies` + `dsh.profile.bundles` + `dsh.bundle.patch` 三件齐备），
+> 因此它出现在「已安装」分组，装与卸都走插件页右上角「添加插件」那套官方流程。
 
 ---
 
 ## 安装
 
-两条路都行，选一条即可。改完**必须完全退出并重启 DSH**（宿主半边不走 dsh-hmr 热重载）。
+推荐走**官方插件安装器**（装在「已安装」分组里，可一键卸载）。改完**必须完全退出并重启 DSH**（宿主半边不走 dsh-hmr 热重载）。
 
-### 方式 A：一键脚本（file:/// 挂载，最简单，无需 npm 发布）
+### 方式 A：官方安装器（推荐，出现在「已安装」分组）
+
+包内已带 `dsh.bundle.patch: ./cordis.patch.yml`、`exports`、`icon` 与 `dsh.client` 声明，三件套齐备（`dependencies` + `dsh.profile.bundles` + bundle patch），因此官方安装器直接认它。
+
+**图形界面**：左侧「插件」→ 右上角「**添加插件**」→ 在输入框填本包的**绝对路径**：
+
+```
+C:\Users\<你>\AppData\Roaming\dsh-desktop\harness\dialog-fence
+```
+
+点安装。成功后卡片出现在「**已安装**」分组（不是「官方」分组），点进去的详情页里就有围栏配置区。
+卸载同理：进该包详情页点「卸载」，卡片消失、loader 行一并移除。
+
+**命令行**：
 
 ```bash
-# 查看环境与安装状态
-node scripts/install.mjs status
+dsh plugin --profile web add "C:\Users\<你>\AppData\Roaming\dsh-desktop\harness\dialog-fence"
+```
 
+`dsh plugin add` 装完后，`dsh-plugin-manager` 的 `reconcile()` 会**自动**把声明了 `dsh.bundle` 的新依赖追加进 profile 的 `dsh.profile.bundles` 并保存 manifest —— 不需要手工改 `profiles/<profile>/package.json`。
+
+> ⚠️ **重要：本地路径安装是「复制」，不是「链接」**
+>
+> DSH Desktop 的安装后端（`profileBundlePackageBackend`）会把整个源码目录**复制**
+> 到 generation 快照里，再在那儿 pnpm add：
+>
+> ```
+> harness/profiles/.generations/live/dsh-dialog-fence+<版本>+<hash>/node_modules/dsh-dialog-fence/
+> ```
+>
+> 所以**改完 `harness/dialog-fence/` 里的源码，已安装的那份不会跟着变**，
+> 必须在插件页卸载再装一次（或重跑上面那条命令）。
+> 规则数据不在这里：默认数据目录固定为 `<DSH_HOME>/dialog-fence/rules`，
+> 与 generation 快照无关，升级换代不会丢规则（见下面「直接编辑规则文件」）。
+
+> 想要「改一行就生效」的开发体验，用方式 B。
+
+### 方式 B：`file:///` 挂载（开发用，不进「已安装」清单）
+
+```bash
 # 装到默认 profile（本机 DSH Desktop 用的 profile 叫 web）
 node scripts/install.mjs install
 
-# 指定 profile / DSH_HOME
-node scripts/install.mjs install --profile headless --home "C:\Users\你\AppData\Roaming\dsh-desktop\harness"
+# 指定 profile / DSH_HOME；--dry-run 只查看不落盘
+node scripts/install.mjs install --profile headless --home "C:\Users\你\AppData\Roaming\dsh-desktop\harness" --dry-run
 
-# 先看会写什么，不落盘
-node scripts/install.mjs install --dry-run
-
-# 卸载（只删插入行，rules/ 里的规则文件保留）
+# 卸载（只删插入行，规则文件保留）
 node scripts/install.mjs uninstall
 ```
 
-脚本做的事：往 `<DSH_HOME>/profiles/<profile>/cordis.patch.yml` 末尾追加一段带标记的 insert 块，并在改写前自动备份成 `cordis.patch.yml.<时间戳>.bak`。
+脚本往 `<DSH_HOME>/profiles/<profile>/cordis.patch.yml` 末尾追加一段带标记的 insert 块，改写前自动备份成 `cordis.patch.yml.<时间戳>.bak`：
 
 ```yaml
 # >>> dsh-dialog-fence (managed by scripts/install.mjs — do not edit by hand) >>>
@@ -95,33 +128,14 @@ node scripts/install.mjs uninstall
 > 若本机没有 `node`（DSH Desktop 自带的是 Electron），用：
 > `$env:ELECTRON_RUN_AS_NODE="1"; & "D:\DSH Desktop\DSH Desktop.exe" scripts\install.mjs status`
 
-> 用这种方式安装时，Desktop 日志里可能出现一条
-> `[desktop] profile inconsistency: the patch layer inserts file:///…, which is not installed`。
-> 这是 Desktop 的一致性提示（它把 `file:///` 插入行的路径当成包名去 `node_modules` 找），
-> **不影响加载**——同一份日志的下一行就是 `[dialog-fence] ready`。想去掉这条提示请用方式 B。
+这种方式是**引用源码目录**，改 `client.js` 刷新页面即可、改 `index.js` 重启即可，无需重装。
+代价：`file:///` 插入行不属于 profile bundle，因此
 
-### 方式 B：作为 profile bundle 安装（`dsh plugin` / pnpm 生态）
+- **不会**出现在插件页「已安装」分组（插件管理清单只列 profile 里真实安装的包）；
+- Desktop 日志可能出现 `[desktop] profile inconsistency: the patch layer inserts file:///…, which is not installed`——只是提示，**不影响加载**，同一份日志下一行就是 `[dialog-fence] ready`。
 
-包内已带 `cordis.patch.yml` 与 `dsh.bundle.patch` 声明，因此装进 profile 后由 `dsh-app-boot` 自动应用：
-
-```bash
-# 加进 profile 依赖，然后重启 DSH
-dsh plugin --profile web add github:ILoveHAKU/dsh-dialog-fence
-```
-
-`dsh plugin add` 装完后，`dsh-plugin-manager` 的 `reconcile()` 会**自动**把声明了 `dsh.bundle` 的新依赖追加进 profile 的 `dsh.profile.bundles` 并保存 manifest —— 不需要手工改 `profiles/<profile>/package.json`。只有没有 `dsh.bundle` 声明的包才会被降级成普通依赖并打印警告：
-
-```
-dsh: warning: <name> declares no dsh.bundle — installed as a plain dependency, not a profile layer
-```
-
-本包声明了 `dsh.bundle.patch`，所以走的是自动识别那一条。
-
-> 本仓库是 **private**，`dsh plugin add github:...` 需要该机器上已有可用的 GitHub 凭据（`gh auth login` 等）。
-> 不想折腾凭据就直接用方式 A。
-
-`dsh` 与 `dsh desktop` 的差别只在 profile 名字上：两者读同一套 profile 补丁层。
-注意 `desktop` 这个 profile 名由 Electron 独占，CLI 会拒绝 `--profile desktop`（本机 Desktop 实际使用的是 `web`）。
+> **两种方式不要同时用**。同时装会有两条 loader 行重复注册槽位。
+> 从方式 B 切到方式 A 之前，先 `node scripts/install.mjs uninstall`。
 
 ### 验证安装
 
@@ -163,7 +177,7 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 **三处配置入口**（渲染的是同一个组件，内容和行为完全一致）：
 
 - **设置左栏 → 「对话围栏」**：一级菜单项，和「通知提醒」「模型」并排。
-- **左侧「插件」→ 官方分组 → 「对话围栏」卡片**：卡片上是这一行摘要，点开就是完整配置界面。
+- **左侧「插件」→ 已安装 → dsh-dialog-fence**：点进该包详情页，配置区在包描述与行之间。
 - **设置 → 内置插件 → 「对话围栏」标签页**：老入口，保留。
 
 三处都有：
@@ -189,16 +203,23 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 
 ### 直接编辑规则文件（推荐给「随时配置和维护」）
 
-默认数据目录 `<插件目录>/rules`（可用环境变量 `DIALOG_FENCE_DIR` 指到别处）：
+默认数据目录 `<DSH_HOME>/dialog-fence/rules`（可用环境变量 `DIALOG_FENCE_DIR` 指到别处）：
 
 ```
-rules/
+<DSH_HOME>/dialog-fence/rules/
 ├── state.json                          ← 只存开关，不存正文
 └── sessions/
     └── session-<uuid>/
         ├── 01-no-outside-edits.txt     ← 文件名前缀决定注入顺序
         └── 02-flag-uncertainty.txt
 ```
+
+> 为什么规则不放在包目录里：0.5.0 起本插件可以作为组合包被官方安装器装进
+> `profiles/.generations/live/<gen>/node_modules/dsh-dialog-fence/`，那个目录每次升级
+> 都会换成一份新的快照副本。宿主半边的 `resolveDshHome()` 会从插件所在目录向上找
+> 第一个同时含 `profiles/` 与 `sessions/` 的祖先（即 DSH home），把数据目录固定在那里，
+> 于是**开发态（`<home>/dialog-fence`）与组合包快照形态（`<gen>/node_modules/dsh-dialog-fence`）
+> 指向同一个 `<home>/dialog-fence/rules`**，换版本不丢规则。
 
 规则就是「目录里有几个 txt，就有几条规则」：
 
@@ -233,12 +254,12 @@ rules/
 ```
 dialog-fence/
 ├── index.js            宿主半边：运行时上下文段 + /fence 命令 + HTTP 路由（零 import）
-├── client.js           浏览器半边：会话按钮 + 浮层面板 + 设置页/插件卡片/插件标签页（懒 CJS 工厂，只 require react）
+├── client.js           浏览器半边：会话按钮 + 浮层面板 + 设置页/插件详情配置区/插件标签页（懒 CJS 工厂，只 require react）
 ├── icon.svg            插件页图标
 ├── package.json        dsh.bundle.patch / dsh.client / icon 声明
-├── cordis.patch.yml    bundle 安装层（方式 B 用）
-├── rules/              规则数据（每条规则一个 txt，运行时生成，已在 .gitignore 中）
-├── scripts/install.mjs 一键安装器（方式 A 用，同时支持 dsh 与 DSH Desktop）
+├── cordis.patch.yml    bundle 安装层（方式 A 用）
+├── rules/              开发态遗留的规则目录（0.5.0 起数据在 <DSH_HOME>/dialog-fence/rules，已在 .gitignore 中）
+├── scripts/install.mjs 一键安装器（方式 B 用，同时支持 dsh 与 DSH Desktop）
 ├── test/               smoke（宿主逻辑）/ route（HTTP API）/ client（bundle 形态）/ render（真 React 首帧）
 └── docs/               设计与实施方案、运维手册与变更记录
 ```
@@ -254,9 +275,8 @@ dialog-fence/
 - 面板与三处配置入口需要 Web 形态；CLI / TUI / headless 只有 `/fence` 命令。
 - 规则是「软约束」：它进入模型可见上下文并对模型产生强引导，但**不是强制拦截**。要硬拦截工具调用，请用 `PreToolUse` 钩子（本机已有 `harness/fence/guard.mjs` 做这类事）。
 - 与 `workbuddy` / `opencode-go` 等未声明 `systemPromptUpdate` 的路由完全兼容——正因为本插件**从不改系统提示词**。
-- 总开关控制的是「是否注入」，不等于卸载插件；要彻底停用请在插件清单里关掉 `dialog-fence` 这个 loader entry。
-- 左侧「插件」页的**插件管理清单**只列 profile 里真实安装的包；用 `file:///` 挂载安装时
-  dialog-fence 不会出现在那份清单里（配置入口不受影响，见上面的「五处界面」）。
+- 总开关控制的是「是否注入」，不等于卸载插件；要彻底停用请在插件页该包详情页里关掉开关或直接卸载。
+- 本地路径安装是**复制**进 generation 快照，改源码后必须重装（见「安装」一节的警告）。
 
 ## License
 

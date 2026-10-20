@@ -1,8 +1,8 @@
 {
   "name": "dsh-dialog-fence",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
-  "description": "Per-session dialogue fence: one .txt file per rule, injected into the runtime-context snapshot only for the sessions that enabled it (cache-safe, append-only, compression-durable). Ships a browser panel plus a settings page, a Plugins-page card and a Plugins tab for `dsh web` / DSH Desktop.",
+  "description": "Per-session dialogue fence: one .txt file per rule, injected into the runtime-context snapshot only for the sessions that enabled it (cache-safe, append-only, compression-durable). Installs as a normal DSH bundle, so it shows up under Plugins → Installed and can be installed/removed with the official installer; its config renders inside its own bundle page, plus a Settings section and a conversation panel.",
   "type": "module",
   "main": "index.js",
   "icon": "./icon.svg",

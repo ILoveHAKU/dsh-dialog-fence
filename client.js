@@ -29,7 +29,11 @@ window.__ModuleLoader__.load({
     const SLOT_OVERLAY = 'shell.overlay';
     const SLOT_SETTINGS = 'settings.section';
     const SLOT_PLUGINS_TAB = 'settings.plugins.tab';
-    const SLOT_PLUGIN_ITEM = 'plugins.item';
+    // 组合包自己的配置区：以 npm 包名为 key，渲染在「插件 → 已安装 → 本包」详情页的
+    // 描述与行之间（owner 只传 view: 'page'）。用它而不是 plugins.item，
+    // 因为 plugins.item 的语义固定是「官方分组里的一张卡片」。
+    const SLOT_BUNDLE_CONFIG = 'plugins.bundle.config';
+    const BUNDLE_NAME = 'dsh-dialog-fence';
 
     // ---------------------------------------------------------------------
     // 极小的外部 store：面板开合 + 各会话快照 + 全局概览
@@ -420,27 +424,13 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------------
-    // 3) 配置页：插件页（settings.plugins.tab / plugins.item）与设置左栏（settings.section）
+    // 3) 配置页：插件页（settings.plugins.tab / plugins.bundle.config）与设置左栏（settings.section）
     // ---------------------------------------------------------------------
 
-    function FenceItem(props) {
-      const view = props !== undefined && props !== null ? props.view : undefined;
-      if (view === 'summary') {
-        const snapshot = useExternalStore();
-        const overview = snapshot.overview;
-        const globalOn = overview === null || overview === undefined || overview.globalEnabled !== false;
-        const count = (overview?.sessions ?? []).length;
-        return react.createElement(
-          'span',
-          null,
-          `按会话注入的对话边界规则，每条规则一个 txt 文件。当前${globalOn ? '已开启' : '已关闭'}${count > 0 ? `，${count} 个会话配置过` : ''}。`,
-        );
-      }
-      return react.createElement(FencePage, { flat: true });
-    }
-
     function FencePage(props) {
-      const flat = props !== undefined && props !== null && props.flat === true;
+      // bundle 详情页传入的是 {view:'page'}，那里已经有自己的标题与留白，
+      // 所以除显式 flat 之外，view === 'page' 也用紧凑版式。
+      const flat = (props !== undefined && props !== null && props.flat === true) || (props?.view === 'page');
       const snapshot = useExternalStore();
       const overview = snapshot.overview;
       const busy = snapshot.busy === true;
@@ -567,17 +557,15 @@ window.__ModuleLoader__.load({
         'dialog-fence: plugins-tab',
       );
 
-      // (c) 左侧「插件」页 → 官方分组里的一张卡片（点开就是同一份配置界面）。
-      //     summary 视图只渲染一行说明；page 视图渲染完整表单。
+      // (c) 「插件」页 → 已安装 → 本组合包详情页里的配置区。
+      //     owner 用 entryKey: 包名 匹配，并只传 view: 'page'。
+      //     注意不能用 plugins.item —— 那个 slot 的语义固定是「官方分组」，改不到「已安装」。
       ctx.effect(
         () =>
-          ctx.slots.inject(SLOT_PLUGIN_ITEM, () =>
-            ctx.slots.register(
-              { name: SLOT_PLUGIN_ITEM, id: 'dialog-fence', order: 50, label: () => '对话围栏' },
-              FenceItem,
-            ),
+          ctx.slots.inject(SLOT_BUNDLE_CONFIG, () =>
+            ctx.slots.register({ name: SLOT_BUNDLE_CONFIG, key: BUNDLE_NAME }, FencePage),
           ),
-        'dialog-fence: plugins-item',
+        'dialog-fence: bundle-config',
       );
     }
 

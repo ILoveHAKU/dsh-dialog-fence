@@ -36,16 +36,50 @@ const name = 'dialog-fence';
  */
 const inject = ['systemPrompt', 'commands'];
 
-/** 插件自身目录（规则与文档都放这里，产物集中）。 */
+/** 插件自身目录（按安装形态会变，不要用它存数据）。 */
 const SELF_DIR = import.meta.dirname;
+
+/**
+ * 向上找出 DSH home：第一个同时含 profiles/ 与 sessions/ 的祖先目录。
+ *
+ * 为什么需要它：0.5.0 起本插件可以作为组合包被官方安装器装进
+ * `<home>/profiles/.generations/live/<gen>/node_modules/dsh-dialog-fence/`，
+ * 那个目录每次升级都会换一份新的快照副本 —— 规则若跟着 SELF_DIR 走就会丢。
+ * 从该位置向上走：node_modules → live → .generations → profiles → <home>，
+ * 只有 <home> 同时含 profiles/ 与 sessions/。
+ * 开发态（file:/// 挂载在 <home>/dialog-fence）向上第一层就是 <home>。
+ * @returns {string|null} 绝对路径，找不到返回 null。
+ */
+function resolveDshHome() {
+  let dir = SELF_DIR;
+  for (let depth = 0; depth < 8; depth += 1) {
+    try {
+      if (fs.existsSync(path.join(dir, 'profiles')) && fs.existsSync(path.join(dir, 'sessions'))) return dir;
+    } catch {
+      /* 权限不足等：继续向上 */
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
 /**
  * 数据目录可被环境变量覆盖：仅供测试指向临时目录，避免测试直接改写线上规则
  * （测试中途崩溃就会弄丢真实规则）。正常运行时该变量不存在。
+ *
+ * 默认落在 `<DSH home>/dialog-fence/rules`：与「开发态 file:/// 挂载在
+ * <home>/dialog-fence」时的旧路径完全一致，因此无需迁移；装进组合包快照后
+ * 也仍指向同一个目录，升级换代不丢规则。
  */
+const DSH_HOME = resolveDshHome();
 const DATA_DIR =
   typeof process.env.DIALOG_FENCE_DIR === 'string' && process.env.DIALOG_FENCE_DIR.length > 0
     ? process.env.DIALOG_FENCE_DIR
-    : path.join(SELF_DIR, 'rules');
+    : DSH_HOME === null
+      ? path.join(SELF_DIR, 'rules')
+      : path.join(DSH_HOME, 'dialog-fence', 'rules');
 
 const SESSIONS_DIR = path.join(DATA_DIR, 'sessions');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');

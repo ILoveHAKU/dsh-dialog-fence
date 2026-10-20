@@ -10,6 +10,7 @@
  *
  * 0.3.0 起有三处界面：会话头部按钮、浮层面板、插件页（settings.plugins.tab）。
  * 0.4.0 起再加两处：设置左栏一级菜单（settings.section）、插件页官方分组卡片（plugins.item）。
+ * 0.5.0 起 plugins.item 换成 plugins.bundle.config（组合包详情页里的配置区）。
  *
  * 这一步只保证 bundle 语法正确、产物形状正确、slot 注册参数正确；
  * 真正的视觉与交互需要重启 DSH 后在浏览器里看。
@@ -140,7 +141,7 @@ assert.deepEqual(effects, [
   'dialog-fence: overlay',
   'dialog-fence: settings-section',
   'dialog-fence: plugins-tab',
-  'dialog-fence: plugins-item',
+  'dialog-fence: bundle-config',
 ]);
 assert.equal(injections, 5, 'all slots go through slots.inject (waits for declaration)');
 assert.equal(registrations.length, 5);
@@ -173,14 +174,11 @@ assert.equal(typeof tabSpec.label, 'function', 'label is a thunk so it follows t
 assert.equal(tabSpec.label(), '对话围栏');
 assert.equal(typeof PluginTab, 'function');
 
-// 左侧「插件」页的卡片（view==='summary' 是一行说明，view==='page' 是完整表单）
-const { spec: itemSpec, component: FenceItem } = registrations[4];
-assert.equal(itemSpec.name, 'plugins.item', 'appears as a card on the Plugins page');
-assert.equal(itemSpec.id, 'dialog-fence', 'own card id, joins the Official group');
-assert.equal(typeof itemSpec.order, 'number');
-assert.equal(typeof itemSpec.label, 'function');
-assert.equal(itemSpec.label(), '对话围栏');
-assert.equal(typeof FenceItem, 'function');
+// 「插件」页 → 已安装 → 本组合包详情页里的配置区
+const { spec: bundleSpec, component: BundleConfig } = registrations[4];
+assert.equal(bundleSpec.name, 'plugins.bundle.config', 'renders inside the bundle detail page');
+assert.equal(bundleSpec.key, 'dsh-dialog-fence', 'keyed by the bundle package name');
+assert.equal(typeof BundleConfig, 'function');
 
 // ---- 4) 组件能在「未读取到数据」与「有数据」两种状态下渲染而不抛 ---------------
 const headerTree = HeaderAction({ sessionId: 'session-x' });
@@ -196,13 +194,10 @@ const sectionTree = FencePage();
 assert.equal(sectionTree.type, 'div');
 assert.equal(sectionTree.props.className, 'dialog-fence-page');
 
-// plugins.item 的两个视图
-const summaryTree = FenceItem({ view: 'summary' });
-assert.equal(summaryTree.type, 'span', 'summary view is the card one-liner');
-assert.match(String(summaryTree.children[0] ?? ''), /对话边界规则/, 'summary text explains what the fence is');
-const pageTree = FenceItem({ view: 'page' });
-assert.equal(pageTree.type, FencePage, 'page view delegates to the shared config page');
-assert.equal(pageTree.props.flat, true, 'page view asks for the flat (no outer padding) variant');
+// 组合包详情页传入的是 { view: 'page' }，此时用紧凑版式（详情页自己有标题与留白）
+const bundleTree = BundleConfig({ view: 'page' });
+assert.equal(bundleTree.type, 'div');
+assert.equal(bundleTree.props.className, 'dialog-fence-flat', 'page view inside a detail page drops the outer padding');
 
 // ---- 5) 面板里不再有 textarea，只有逐行的 input ------------------------------
 assert.doesNotMatch(source, /createElement\(\s*['"]textarea['"]/i, 'client bundle no longer creates a textarea');
