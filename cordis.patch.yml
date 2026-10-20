@@ -1,0 +1,11 @@
+# dialog-fence —— bundle 安装层（`dsh plugin` / profile bundles 用）
+#
+# 当本包以 npm 依赖形态装进某个 profile（并出现在该 profile 的
+# `dsh.profile.bundles` 里）时，dsh-app-boot 会自动应用本文件：
+# 往 loader 里插入一行插件。id 即 loader 行名，name 即包名。
+#
+# 如果你是用 scripts/install.mjs 装的（file:/// 绝对路径形态），
+# 走的不是这条路径，而是直接往 profile 的 cordis.patch.yml 追加 insert 行。
+- insert:
+    - id: dialog-fence
+      name: 'dsh-dialog-fence'

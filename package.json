@@ -1,0 +1,65 @@
+{
+  "name": "dsh-dialog-fence",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Per-session dialogue fence: inject user-set boundary rules into the runtime-context snapshot only for the sessions that enabled it (cache-safe, append-only, compression-durable). Ships a browser panel for `dsh web` / DSH Desktop.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "scripts",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ],
+      "platform": "web"
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.0-rc.2": "compatible"
+      }
+    }
+  },
+  "scripts": {
+    "test": "node test/smoke.mjs",
+    "install-plugin": "node scripts/install.mjs install",
+    "uninstall-plugin": "node scripts/install.mjs uninstall"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-desktop",
+    "prompt",
+    "guardrail",
+    "fence",
+    "rules",
+    "cache",
+    "billion-context"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ILoveHAKU/dsh-dialog-fence.git"
+  },
+  "author": "ILoveHAKU",
+  "license": "MIT"
+}
