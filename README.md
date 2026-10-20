@@ -80,14 +80,20 @@ node scripts/install.mjs uninstall
 包内已带 `cordis.patch.yml` 与 `dsh.bundle.patch` 声明，因此装进 profile 后由 `dsh-app-boot` 自动应用：
 
 ```bash
-# 1) 加进 profile 依赖（私有仓库用 git 形式；公开发布后也可用包名）
+# 加进 profile 依赖，然后重启 DSH
 dsh plugin --profile web add github:ILoveHAKU/dsh-dialog-fence
-
-# 2) 把它列进 profile 的 dsh.profile.bundles（profiles/web/package.json）
-#    "dsh": { "profile": { "bundles": [ ... 原有项, "dsh-dialog-fence" ] } }
-
-# 3) 重启 DSH
 ```
+
+`dsh plugin add` 装完后，`dsh-plugin-manager` 的 `reconcile()` 会**自动**把声明了 `dsh.bundle` 的新依赖追加进 profile 的 `dsh.profile.bundles` 并保存 manifest —— 不需要手工改 `profiles/<profile>/package.json`。只有没有 `dsh.bundle` 声明的包才会被降级成普通依赖并打印警告：
+
+```
+dsh: warning: <name> declares no dsh.bundle — installed as a plain dependency, not a profile layer
+```
+
+本包声明了 `dsh.bundle.patch`，所以走的是自动识别那一条。
+
+> 本仓库是 **private**，`dsh plugin add github:...` 需要该机器上已有可用的 GitHub 凭据（`gh auth login` 等）。
+> 不想折腾凭据就直接用方式 A。
 
 `dsh` 与 `dsh desktop` 的差别只在 profile 名字上：两者读同一套 profile 补丁层。
 注意 `desktop` 这个 profile 名由 Electron 独占，CLI 会拒绝 `--profile desktop`（本机 Desktop 实际使用的是 `web`）。
@@ -95,8 +101,8 @@ dsh plugin --profile web add github:ILoveHAKU/dsh-dialog-fence
 ### 验证安装
 
 ```bash
-# 1) 无宿主单元测试（语法 + 行为，不会碰线上 rules.json）
-node test/smoke.mjs && node test/route.mjs && node test/client.mjs
+# 1) 无宿主测试（语法 + 行为，不会碰线上 rules.json）
+node test/smoke.mjs && node test/route.mjs && node test/client.mjs && node test/render.mjs
 
 # 2) 重启后在任意会话里
 /fence status
@@ -192,7 +198,7 @@ dialog-fence/
 ├── cordis.patch.yml    bundle 安装层（方式 B 用）
 ├── rules.json          规则状态（按 sessionId 分桶，运行时生成）
 ├── scripts/install.mjs 一键安装器（方式 A 用，同时支持 dsh 与 DSH Desktop）
-├── test/               smoke（宿主逻辑）/ route（HTTP API）/ client（bundle 形态）
+├── test/               smoke（宿主逻辑）/ route（HTTP API）/ client（bundle 形态）/ render（真 React 首帧）
 └── docs/               设计与实施方案、运维手册与变更记录
 ```
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-dialog-fence",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Per-session dialogue fence: inject user-set boundary rules into the runtime-context snapshot only for the sessions that enabled it (cache-safe, append-only, compression-durable). Ships a browser panel for `dsh web` / DSH Desktop.",
   "type": "module",
@@ -41,7 +41,7 @@
     }
   },
   "scripts": {
-    "test": "node test/smoke.mjs",
+    "test": "node test/smoke.mjs && node test/route.mjs && node test/client.mjs && node test/render.mjs",
     "install-plugin": "node scripts/install.mjs install",
     "uninstall-plugin": "node scripts/install.mjs uninstall"
   },

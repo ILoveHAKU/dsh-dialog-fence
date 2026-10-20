@@ -16,7 +16,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -139,6 +139,34 @@ assert.equal(header_tree.props.className, 'dialog-fence-trigger');
 
 // Panel 在没打开任何会话时返回 null（浮层不占 DOM）
 assert.equal(Panel(), null);
+
+// ---- 5) 复算 dsh-client-modules 的解析链（保证重启后真能被扫到）-------------
+// 参考 dsh-client-modules/lib/index.js：
+//   locatePkgJson(pathLike) → nearestPackage(moduleUrl) → 读 dsh.client
+//   → platform 必须 'web' → exports["./client"] 解出 bundle 路径 → 文件必须存在
+const PLUGIN_DIR = join(import.meta.dirname, '..');
+const pkg = JSON.parse(readFileSync(join(PLUGIN_DIR, 'package.json'), 'utf8'));
+
+function clientExportOf(pkgName, exportsField) {
+  const field = exportsField?.['./client'];
+  if (typeof field === 'string') return field;
+  if (typeof field?.default === 'string') return field.default;
+  throw new Error(`client-modules: ${pkgName} exports["./client"] must be a string or an object with a string default`);
+}
+
+assert.equal(typeof pkg.dsh?.client?.platform, 'string', 'dsh.client.platform is declared');
+assert.equal(pkg.dsh.client.platform, 'web', 'declares the web platform');
+assert.ok(Array.isArray(pkg.dsh.client.inject ?? []), 'dsh.client.inject is a string array when present');
+for (const name of pkg.dsh.client.inject ?? []) assert.equal(typeof name, 'string');
+
+const clientRel = clientExportOf(pkg.name, pkg.exports);
+assert.equal(clientRel, './client.js');
+assert.ok(existsSync(join(PLUGIN_DIR, clientRel)), 'exports["./client"] points at a file that exists');
+
+// bundle 图的 id 就是 package.json 的 name，服务 URL 由它拼出来。
+assert.equal(pkg.name, definition.id, 'package name matches the module-loader id');
+assert.equal(pkg.dsh?.bundle?.patch, './cordis.patch.yml', 'declares a bundle patch for dsh plugin add');
+assert.ok(existsSync(join(PLUGIN_DIR, pkg.dsh.bundle.patch)), 'bundle patch file exists');
 
 console.log('OK all dialog-fence client bundle assertions passed');
 console.log(`   bundle: ${pathToFileURL(CLIENT_FILE).href}`);
