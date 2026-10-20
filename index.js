@@ -1,9 +1,9 @@
 /**
- * dialog-fence — 会话级「围栏」规则注入插件
+ * dialog-fence — 对话级「围栏」规则注入插件
  *
  * 设计红线（用户 CR-01 的四条要求）：
- *  1. 不影响其他对话：规则按 sessionId 隔离，默认关闭；未启用的会话注入空字符串，
- *     renderContextSections 会过滤掉空段，因此对其它会话零 token 零影响。
+ *  1. 不影响其他对话：通用规则对所有对话生效，会话规则只叠加到指定会话；
+ *     没有任何规则时渲染空字符串，renderContextSections 会过滤掉空段 = 零 token 零影响。
  *  2. 不破坏缓存命中：只注册一个 systemPrompt.context()（运行时上下文段），
  *     绝不注册/修改系统提示词段。运行时快照由 agent-loop 以「纯追加一条 user 消息」
  *     的方式落历史，已有的请求前缀永远不被重写。
@@ -13,19 +13,28 @@
  *     dshDurableToolPath 归为 durable/runtime-context，自动进 protectedLatestTools
  *     （只保护最新一份），旧快照可被压缩，围栏常驻且不膨胀。
  *
- * 存储形态（0.3.0 起）：**每条规则一个 .txt 文件**，方便用任意编辑器随时增删改：
- *   <插件目录>/rules/sessions/<sessionId>/01-<slug>.txt
- *   <插件目录>/rules/sessions/<sessionId>/02-<slug>.txt
- *   <插件目录>/rules/state.json      ← 只存开关（全局 + 各会话），不存规则正文
- * 文件名前缀决定顺序；删文件即删规则；改文件内容即改规则。
- * 若某个会话在 state.json 里没有显式条目，则「目录里有 .txt」即视为启用
- * （往目录里丢一个 txt 就能直接生效）。
+ * 存储形态（0.7.0 起）：**单个 JSON 文件**，用户可直接编辑内容：
+ *   <DSH home>/dialog-fence/fence.json
+ *   {
+ *     "version": 3,
+ *     "enabled": true,
+ *     "rules": ["通用规则，对每个对话生效", "..."],
+ *     "sessions": { "<sessionId>": { "enabled": true, "rules": ["只对该会话生效"] } }
+ *   }
+ *
+ * 文件位置可由用户自定义：改写同目录的 location.json（{"file": "<绝对路径>"}），
+ * 或用 /fence file <绝对路径> / 面板上的「更改位置」。指针文件位置固定，
+ * 围栏文件本身想去哪就去哪。
+ *
+ * 0.6.x 及更早的多 txt 目录（rules/common/*.txt + rules/sessions/<id>/*.txt）
+ * 会在首次启动时**自动迁移**进 fence.json；老文件不删除，留给用户自查。
  *
  * 零 import：不依赖裸包解析，只用 process.getBuiltinModule。
  */
 
 const fs = process.getBuiltinModule('node:fs');
 const path = process.getBuiltinModule('node:path');
+const childProcess = process.getBuiltinModule('node:child_process');
 
 const name = 'dialog-fence';
 /**
@@ -44,7 +53,7 @@ const SELF_DIR = import.meta.dirname;
  *
  * 为什么需要它：0.5.0 起本插件可以作为组合包被官方安装器装进
  * `<home>/profiles/.generations/live/<gen>/node_modules/dsh-dialog-fence/`，
- * 那个目录每次升级都会换一份新的快照副本 —— 规则若跟着 SELF_DIR 走就会丢。
+ * 那个目录每次升级都会换一份新的快照副本 —— 数据若跟着 SELF_DIR 走就会丢。
  * 从该位置向上走：node_modules → live → .generations → profiles → <home>，
  * 只有 <home> 同时含 profiles/ 与 sessions/。
  * 开发态（file:/// 挂载在 <home>/dialog-fence）向上第一层就是 <home>。
@@ -65,30 +74,32 @@ function resolveDshHome() {
   return null;
 }
 
-/**
- * 数据目录可被环境变量覆盖：仅供测试指向临时目录，避免测试直接改写线上规则
- * （测试中途崩溃就会弄丢真实规则）。正常运行时该变量不存在。
- *
- * 默认落在 `<DSH home>/dialog-fence/rules`：与「开发态 file:/// 挂载在
- * <home>/dialog-fence」时的旧路径完全一致，因此无需迁移；装进组合包快照后
- * 也仍指向同一个目录，升级换代不丢规则。
- */
 const DSH_HOME = resolveDshHome();
-const DATA_DIR =
-  typeof process.env.DIALOG_FENCE_DIR === 'string' && process.env.DIALOG_FENCE_DIR.length > 0
-    ? process.env.DIALOG_FENCE_DIR
-    : DSH_HOME === null
-      ? path.join(SELF_DIR, 'rules')
-      : path.join(DSH_HOME, 'dialog-fence', 'rules');
 
-const SESSIONS_DIR = path.join(DATA_DIR, 'sessions');
 /**
- * 通用规则目录（0.6.0 起）：这里的规则对**每一个对话**生效，包括新开的对话。
- * 设置页直接编辑这一层 —— 用户要的是「配置围栏的具体内容」，不是一张会话清单。
- * 会话专属规则仍然保留（叠加在通用规则之后），只是不再占据主视图。
+ * 围栏数据所在的「基目录」：默认 `<DSH home>/dialog-fence`，
+ * 与 0.5/0.6 时代 file:/// 挂载时的路径完全一致。
+ * 装进组合包快照后仍指向同一目录，升级换代不丢数据。
+ *
+ * DIALOG_FENCE_HOME 仅供测试指向临时目录（避免测试改到真实围栏）；
+ * DIALOG_FENCE_DIR 是 0.6.x 的老变量，仍兼容（会被当作基目录 + /rules 的老布局）。
  */
-const COMMON_DIR = path.join(DATA_DIR, 'common');
-const STATE_FILE = path.join(DATA_DIR, 'state.json');
+function resolveBaseDir() {
+  if (typeof process.env.DIALOG_FENCE_HOME === 'string' && process.env.DIALOG_FENCE_HOME.length > 0) return process.env.DIALOG_FENCE_HOME;
+  if (DSH_HOME === null) return SELF_DIR;
+  return path.join(DSH_HOME, 'dialog-fence');
+}
+
+const BASE_DIR = resolveBaseDir();
+
+/** 0.6.x 及更早的数据目录（多 txt 形态），仅用于自动迁移。 */
+const LEGACY_DIR =
+  typeof process.env.DIALOG_FENCE_DIR === 'string' && process.env.DIALOG_FENCE_DIR.length > 0 ? process.env.DIALOG_FENCE_DIR : path.join(BASE_DIR, 'rules');
+
+/** 位置指针：固定放在基目录，围栏文件本身可以去任意绝对路径。 */
+const LOCATION_FILE = path.join(BASE_DIR, 'location.json');
+
+const FENCE_VERSION = 3;
 
 const CONTEXT_NAME = 'dialog-fence:rules';
 /**
@@ -104,104 +115,162 @@ const MAX_RULE_CHARS = 2000;
 
 const HEADER = 'Dialog fence (user-set rules binding this conversation; a newer direct user instruction wins on conflict):';
 
-const RULE_FILE_PATTERN = /\.txt$/i;
-
 // ---------------------------------------------------------------------------
-// 会话 id → 目录名（sessionId 由 host 铸造，这里再保险一次）
+// 围栏文件位置：默认 base/fence.json，可被 location.json 或环境变量改写
 // ---------------------------------------------------------------------------
 
-function safeName(value) {
+function readLocation() {
+  try {
+    const raw = fs.readFileSync(LOCATION_FILE, 'utf8').replace(/^\uFEFF/, '');
+    const parsed = JSON.parse(raw);
+    if (parsed !== null && typeof parsed === 'object' && typeof parsed.file === 'string' && path.isAbsolute(parsed.file)) return parsed.file;
+  } catch {
+    /* 没有指针 = 用默认位置 */
+  }
+  return null;
+}
+
+function writeLocation(file) {
+  try {
+    fs.mkdirSync(BASE_DIR, { recursive: true });
+  } catch {
+    /* 已存在 */
+  }
+  const tmp = `${LOCATION_FILE}.tmp`;
+  fs.writeFileSync(tmp, `${JSON.stringify({ file }, null, 2)}\n`, 'utf8');
+  fs.renameSync(tmp, LOCATION_FILE);
+}
+
+/** 当前围栏文件绝对路径（每次询问，位置可随时变）。 */
+function fenceFile() {
+  if (typeof process.env.DIALOG_FENCE_FILE === 'string' && process.env.DIALOG_FENCE_FILE.length > 0) return process.env.DIALOG_FENCE_FILE;
+  const located = readLocation();
+  return located === null ? path.join(BASE_DIR, 'fence.json') : located;
+}
+
+/** 围栏文件所在目录（「打开文件夹」的目标）。 */
+function fenceDir() {
+  return path.dirname(fenceFile());
+}
+
+// ---------------------------------------------------------------------------
+// 围栏数据：单文件 JSON
+// ---------------------------------------------------------------------------
+
+function emptyFence() {
+  return { version: FENCE_VERSION, enabled: true, rules: [], sessions: {} };
+}
+
+function normalizeText(value) {
+  return typeof value === 'string' ? value.replace(/\r\n?/g, '\n').trim() : '';
+}
+
+function sanitizeSessionId(value) {
   if (typeof value !== 'string') return '';
   const trimmed = value.trim();
   if (trimmed.length === 0 || trimmed.length > 200) return '';
   if (trimmed === '.' || trimmed === '..') return '';
-  // 只允许字母数字与 - _ . ；其余一律替换，杜绝路径穿越。
+  // 只允许字母数字与 - _ . ；其余一律替换，杜绝路径穿越类问题。
   return trimmed.replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
-function sanitizeSessionId(value) {
-  const safe = safeName(value);
-  return safe.length === 0 || safe === '.' || safe === '..' ? '' : safe;
+/** 把任意解析结果收敛成合法围栏对象；不认识的结构一律丢弃。 */
+function normalizeFence(parsed) {
+  const fence = emptyFence();
+  if (parsed === null || typeof parsed !== 'object') return fence;
+  if (parsed.enabled === false) fence.enabled = false;
+  if (Array.isArray(parsed.rules)) {
+    for (const entry of parsed.rules) {
+      const text = normalizeText(entry);
+      if (text.length > 0) fence.rules.push(text);
+    }
+  }
+  const sessions = parsed.sessions;
+  if (sessions !== null && typeof sessions === 'object') {
+    for (const [id, entry] of Object.entries(sessions)) {
+      const safe = sanitizeSessionId(id);
+      if (safe === '' || entry === null || typeof entry !== 'object') continue;
+      const rules = [];
+      if (Array.isArray(entry.rules)) {
+        for (const value of entry.rules) {
+          const text = normalizeText(value);
+          if (text.length > 0) rules.push(text);
+        }
+      }
+      fence.sessions[safe] = { enabled: entry.enabled !== false, rules };
+    }
+  }
+  return fence;
 }
 
-function sessionDirOf(sessionId) {
-  const safe = sanitizeSessionId(sessionId);
-  return safe === '' ? '' : path.join(SESSIONS_DIR, safe);
-}
+let fenceCache = { mtimeMs: -1, size: -1, fence: null };
 
-// ---------------------------------------------------------------------------
-// 开关状态：state.json 只存 global / sessions[].enabled，不存规则正文
-// ---------------------------------------------------------------------------
-
-let stateCache = { mtimeMs: -1, size: -1, state: null };
-
-function emptyState() {
-  return { version: 2, global: { enabled: true }, sessions: {} };
-}
-
-function loadState() {
+function loadFence() {
+  const file = fenceFile();
   let stat;
   try {
-    stat = fs.statSync(STATE_FILE);
+    stat = fs.statSync(file);
   } catch {
-    stateCache = { mtimeMs: -1, size: -1, state: null };
-    return emptyState();
+    fenceCache = { mtimeMs: -1, size: -1, fence: null };
+    return emptyFence();
   }
-  if (stateCache.state !== null && stateCache.mtimeMs === stat.mtimeMs && stateCache.size === stat.size) return stateCache.state;
-  const state = emptyState();
-  let parsed = null;
+  if (fenceCache.fence !== null && fenceCache.mtimeMs === stat.mtimeMs && fenceCache.size === stat.size) return fenceCache.fence;
+  let fence = emptyFence();
   try {
     // PowerShell 5.1 的 Set-Content / Out-File 默认写 UTF-16LE 或带 BOM 的 UTF-8，
-    // 两种情况 JSON.parse 都会抛错，进而把整个会话的围栏静默清空（本项目踩过一次）。
-    const buf = fs.readFileSync(STATE_FILE);
+    // 两种情况 JSON.parse 都会抛错，进而把整个围栏静默清空（本项目踩过一次）。
+    const buf = fs.readFileSync(file);
     let raw = buf.toString('utf8');
     if (raw.includes('\u0000')) raw = buf.toString('utf16le');
     raw = raw.replace(/^\uFEFF/, '').replace(/^\0+/, '');
-    parsed = JSON.parse(raw);
+    fence = normalizeFence(JSON.parse(raw));
   } catch (error) {
-    console.warn(`[dialog-fence] state.json 解析失败，本次按默认开关处理: ${error?.message ?? error}`);
-    parsed = null;
+    console.warn(`[dialog-fence] 围栏文件解析失败，本轮按空围栏处理（文件未被改写）: ${error?.message ?? error}`);
+    fence = emptyFence();
   }
-  if (parsed !== null && typeof parsed === 'object') {
-    if (parsed.global !== null && typeof parsed.global === 'object' && parsed.global.enabled === false) state.global.enabled = false;
-    const sessions = parsed.sessions;
-    if (sessions !== null && typeof sessions === 'object') {
-      for (const [id, entry] of Object.entries(sessions)) {
-        const safe = sanitizeSessionId(id);
-        if (safe === '' || entry === null || typeof entry !== 'object') continue;
-        state.sessions[safe] = { enabled: entry.enabled === true };
-      }
-    }
-  }
-  stateCache = { mtimeMs: stat.mtimeMs, size: stat.size, state };
-  return state;
+  fenceCache = { mtimeMs: stat.mtimeMs, size: stat.size, fence };
+  return fence;
 }
 
 /** 原子写盘：先写 .tmp 再 rename，避免半截 JSON 卡死后续装配。 */
-function saveState(state) {
+function saveFence(fence) {
+  const file = fenceFile();
   try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.mkdirSync(path.dirname(file), { recursive: true });
   } catch {
     /* 目录已存在 */
   }
-  const body = `${JSON.stringify(state, null, 2)}\n`;
-  const tmp = `${STATE_FILE}.tmp`;
+  const body = `${JSON.stringify(fence, null, 2)}\n`;
+  const tmp = `${file}.tmp`;
   fs.writeFileSync(tmp, body, 'utf8');
-  fs.renameSync(tmp, STATE_FILE);
+  fs.renameSync(tmp, file);
   try {
-    const stat = fs.statSync(STATE_FILE);
-    stateCache = { mtimeMs: stat.mtimeMs, size: stat.size, state };
+    const stat = fs.statSync(file);
+    fenceCache = { mtimeMs: stat.mtimeMs, size: stat.size, fence };
   } catch {
-    stateCache = { mtimeMs: -1, size: -1, state: null };
+    fenceCache = { mtimeMs: -1, size: -1, fence: null };
   }
 }
 
 // ---------------------------------------------------------------------------
-// 规则文件：一条规则一个 txt
+// 0.6.x 多 txt 目录 → 单文件迁移
 // ---------------------------------------------------------------------------
 
-/** 目录内的规则文件，按文件名自然排序（前缀数字决定顺序）。 */
-function listRuleFilesIn(dir) {
+const RULE_FILE_PATTERN = /\.txt$/i;
+
+function readTextFile(absPath) {
+  try {
+    const buf = fs.readFileSync(absPath);
+    let text = buf.toString('utf8');
+    if (text.includes('\u0000')) text = buf.toString('utf16le');
+    return normalizeText(text.replace(/^\uFEFF/, '').replace(/^\0+/, ''));
+  } catch {
+    return '';
+  }
+}
+
+/** 读出某个目录下的全部 txt（按文件名数字顺序），跳过空白。 */
+function readTextDir(dir) {
   if (dir === '') return [];
   let names;
   try {
@@ -212,149 +281,113 @@ function listRuleFilesIn(dir) {
   return names
     .filter((entry) => RULE_FILE_PATTERN.test(entry))
     .sort((left, right) => left.localeCompare(right, 'en', { numeric: true }))
-    .map((file) => ({ file, path: path.join(dir, file) }));
+    .map((file) => readTextFile(path.join(dir, file)))
+    .filter((text) => text.length > 0);
 }
 
-/** 会话专属规则文件。 */
-function listRuleFiles(sessionId) {
-  return listRuleFilesIn(sessionDirOf(sessionId));
-}
-
-/** 通用规则文件（对每个对话都生效）。 */
-function listCommonFiles() {
-  return listRuleFilesIn(COMMON_DIR);
-}
-
-function readRuleFile(absPath) {
+function readLegacyState() {
+  const file = path.join(LEGACY_DIR, 'state.json');
   try {
-    const buf = fs.readFileSync(absPath);
-    let text = buf.toString('utf8');
-    if (text.includes('\u0000')) text = buf.toString('utf16le');
-    return text.replace(/^\uFEFF/, '').replace(/^\0+/, '').trim();
+    const buf = fs.readFileSync(file);
+    let raw = buf.toString('utf8');
+    if (raw.includes('\u0000')) raw = buf.toString('utf16le');
+    const parsed = JSON.parse(raw.replace(/^\uFEFF/, '').replace(/^\0+/, ''));
+    return parsed !== null && typeof parsed === 'object' ? parsed : {};
   } catch {
-    return '';
+    return {};
   }
 }
 
-/** 读出会话全部规则（跳过空文件）。 */
-function readRules(sessionId) {
-  return readRulesIn(sessionDirOf(sessionId));
-}
-
-/** 读出通用规则（跳过空文件）。 */
-function readCommonRules() {
-  return readRulesIn(COMMON_DIR);
-}
-
-function readRulesIn(dir) {
-  const out = [];
-  for (const row of listRuleFilesIn(dir)) {
-    const text = readRuleFile(row.path);
-    if (text.length > 0) out.push({ file: row.file, text });
-  }
-  return out;
-}
-
-function nextPrefix(sessionId) {
-  return nextPrefixIn(sessionDirOf(sessionId));
-}
-
-function nextPrefixIn(dir) {
-  let max = 0;
-  for (const row of listRuleFilesIn(dir)) {
-    const match = /^(\d+)/.exec(row.file);
-    const value = match === null ? 0 : Number.parseInt(match[1], 10);
-    if (Number.isFinite(value) && value > max) max = value;
-  }
-  return String(max + 1).padStart(2, '0');
-}
-
-/** 从规则正文生成可读文件名后缀（中文等非 ASCII 一律退回 rule）。 */
-function slugOf(text) {
-  const ascii = String(text)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 24);
-  return ascii.length > 0 ? ascii : 'rule';
-}
-
-function ruleFileNameIn(dir, text) {
-  return `${nextPrefixIn(dir)}-${slugOf(text)}.txt`;
-}
-
-function ruleFileName(sessionId, text) {
-  return ruleFileNameIn(sessionDirOf(sessionId), text);
-}
-
-function ensureDir(dir) {
-  if (dir === '') throw new Error('非法目录');
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
-}
-
-function ensureSessionDir(sessionId) {
-  const dir = sessionDirOf(sessionId);
-  if (dir === '') throw new Error('非法会话 id');
-  return ensureDir(dir);
-}
-
-function writeRuleFileIn(dir, file, text) {
-  ensureDir(dir);
-  const name2 = typeof file === 'string' && RULE_FILE_PATTERN.test(file) ? path.basename(file) : ruleFileNameIn(dir, text);
-  const abs = path.join(dir, name2);
-  // 统一 UTF-8 无 BOM 落盘，换行统一成 \n，便于任何编辑器直接改。
-  fs.writeFileSync(abs, `${String(text).replace(/\r\n?/g, '\n').trim()}\n`, 'utf8');
-  return name2;
-}
-
-function writeRuleFile(sessionId, file, text) {
-  return writeRuleFileIn(ensureSessionDir(sessionId), file, text);
-}
-
-function writeCommonRuleFile(file, text) {
-  return writeRuleFileIn(COMMON_DIR, file, text);
-}
-
-function removeRuleFileIn(dir, file) {
-  if (dir === '') return false;
-  const base = path.basename(String(file ?? ''));
-  if (!RULE_FILE_PATTERN.test(base)) return false;
+/**
+ * 首次启动时把老的多 txt 形态迁移成单文件。
+ * 触发的两种情形：
+ *   1) 围栏文件还不存在（全新安装）；
+ *   2) 围栏文件存在但**是空的**（没有任何规则、没有任何会话），
+ *      而老目录里有内容 —— 0.7.0 首次实装就是这种情况：启动时先落了空文件，
+ *      随后才想起来去读老目录，结果 10 条通用规则一直没搬过来。
+ * 老文件保持原样不删；围栏文件里一旦有用户数据就绝不覆盖。
+ */
+function migrateLegacyIfNeeded() {
+  const file = fenceFile();
+  let exists = false;
   try {
-    fs.unlinkSync(path.join(dir, base));
-    return true;
+    exists = fs.existsSync(file);
   } catch {
-    return false;
+    /* 探测失败就不要迁移，避免在异常环境里乱写 */
+    return;
   }
-}
+  if (exists) {
+    const current = loadFence();
+    const empty = commonRules(current).length === 0 && Object.keys(current.sessions ?? {}).length === 0;
+    if (!empty) return;
+  }
+  let legacyExists = false;
+  try {
+    legacyExists = fs.existsSync(path.join(LEGACY_DIR, 'common')) || fs.existsSync(path.join(LEGACY_DIR, 'sessions'));
+  } catch {
+    legacyExists = false;
+  }
+  if (!legacyExists) return;
 
-function removeRuleFile(sessionId, file) {
-  return removeRuleFileIn(sessionDirOf(sessionId), file);
-}
-
-function removeCommonRuleFile(file) {
-  return removeRuleFileIn(COMMON_DIR, file);
-}
-
-function clearRuleFilesIn(dir) {
-  let removed = 0;
-  for (const row of listRuleFilesIn(dir)) {
+  const legacyState = readLegacyState();
+  const fence = emptyFence();
+  if (legacyState?.global?.enabled === false) fence.enabled = false;
+  fence.rules = readTextDir(path.join(LEGACY_DIR, 'common'));
+  if (fence.rules.length === 0 && legacyState?.sessions === undefined) {
+    let anySession = false;
     try {
-      fs.unlinkSync(row.path);
-      removed += 1;
+      anySession = fs.readdirSync(path.join(LEGACY_DIR, 'sessions')).length > 0;
     } catch {
-      /* 忽略单个失败 */
+      anySession = false;
     }
+    if (!anySession) return;
   }
-  return removed;
+
+  let sessionsDir = [];
+  try {
+    sessionsDir = fs.readdirSync(path.join(LEGACY_DIR, 'sessions'), { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  } catch {
+    sessionsDir = [];
+  }
+  const ids = new Set(sessionsDir);
+  if (legacyState?.sessions !== null && typeof legacyState?.sessions === 'object') for (const id of Object.keys(legacyState.sessions)) ids.add(id);
+  for (const id of ids) {
+    const safe = sanitizeSessionId(id);
+    if (safe === '') continue;
+    const rules = readTextDir(path.join(LEGACY_DIR, 'sessions', safe));
+    const explicit = legacyState?.sessions?.[safe];
+    const enabled = explicit === undefined ? rules.length > 0 : explicit?.enabled !== false;
+    if (rules.length === 0 && explicit === undefined) continue;
+    fence.sessions[safe] = { enabled, rules };
+  }
+
+  try {
+    saveFence(fence);
+    console.log(`[dialog-fence] 已从多 txt 目录迁移到单文件: ${file}（老文件保留在 ${LEGACY_DIR}）`);
+  } catch (error) {
+    console.warn(`[dialog-fence] 迁移失败，继续使用老目录: ${error?.message ?? error}`);
+  }
 }
 
-function clearRuleFiles(sessionId) {
-  return clearRuleFilesIn(sessionDirOf(sessionId));
+// ---------------------------------------------------------------------------
+// 规则的增删改查（统一在内存对象上做，写盘在调用方）
+// ---------------------------------------------------------------------------
+
+/** 通用规则（对每个对话生效）。 */
+function commonRules(fence) {
+  return Array.isArray(fence.rules) ? fence.rules : [];
 }
 
-function clearCommonRuleFiles() {
-  return clearRuleFilesIn(COMMON_DIR);
+/** 某个会话的专属规则；会话在 sessions 里没有条目时返回空数组。 */
+function sessionRules(fence, sessionId) {
+  const entry = fence.sessions?.[sessionId];
+  return entry !== undefined && Array.isArray(entry.rules) ? entry.rules : [];
+}
+
+function sessionEntry(fence, sessionId) {
+  if (fence.sessions[sessionId] === undefined) fence.sessions[sessionId] = { enabled: true, rules: [] };
+  if (!Array.isArray(fence.sessions[sessionId].rules)) fence.sessions[sessionId].rules = [];
+  return fence.sessions[sessionId];
 }
 
 // ---------------------------------------------------------------------------
@@ -394,11 +427,10 @@ function sessionIdOf(assembleContext) {
   return typeof id === 'string' && id.length > 0 ? id : '';
 }
 
-/** 会话是否启用：state.json 有显式条目则以它为准，否则「目录里有 txt」即启用。 */
-function isSessionEnabled(state, sessionId, rules) {
-  if (state.global.enabled !== true) return false;
-  const explicit = state.sessions[sessionId];
-  if (explicit !== undefined) return explicit.enabled === true;
+/** 会话层是否启用：有显式条目以它为准，否则「有会话专属规则」即启用。 */
+function isSessionEnabled(fence, sessionId, rules) {
+  const entry = fence.sessions[sessionId];
+  if (entry !== undefined) return entry.enabled !== false && rules.length > 0;
   return rules.length > 0;
 }
 
@@ -408,14 +440,11 @@ function isSessionEnabled(state, sessionId, rules) {
  */
 function fenceTextFor(sessionId) {
   if (sessionId === '') return '';
-  const state = loadState();
-  if (state.global.enabled !== true) return '';
-  const common = readCommonRules();
-  const sessionRules = readRules(sessionId);
-  const texts = common.map((rule) => rule.text);
-  if (isSessionEnabled(state, sessionId, sessionRules)) {
-    for (const rule of sessionRules) texts.push(rule.text);
-  }
+  const fence = loadFence();
+  if (fence.enabled !== true) return '';
+  const texts = [...commonRules(fence)];
+  const own = sessionRules(fence, sessionId);
+  if (isSessionEnabled(fence, sessionId, own)) texts.push(...own);
   return renderRuleTexts(texts);
 }
 
@@ -435,209 +464,230 @@ function jsonResponse(payload, status = 200) {
 
 const LIMITS = { maxRules: MAX_RULES, maxTotalChars: MAX_TOTAL_CHARS, maxRuleChars: MAX_RULE_CHARS };
 
+/** 把规则数组投影成带稳定序号的列表，供面板渲染与按序号增删改。 */
+function rulesView(texts) {
+  return texts.map((text, index) => ({ index, text }));
+}
+
+function fileInfo() {
+  const file = fenceFile();
+  return { file, dir: path.dirname(file), locationFile: LOCATION_FILE, legacyDir: LEGACY_DIR };
+}
+
 /** 通用规则层的快照（设置页主视图就是它）。 */
 function commonSnapshotOf() {
-  const state = loadState();
-  const rules = readCommonRules();
-  const enabled = state.global.enabled === true;
-  const rendered = enabled ? renderRuleTexts(rules.map((rule) => rule.text)) : '';
+  const fence = loadFence();
+  const rules = rulesView(commonRules(fence));
+  const rendered = fence.enabled === true ? renderRuleTexts(commonRules(fence)) : '';
   return {
     ok: true,
     scope: 'common',
-    enabled,
+    enabled: fence.enabled === true,
     rules,
     rendered,
     chars: rendered.length,
     tokens: tokenEstimate(rendered),
-    dir: COMMON_DIR,
+    ...fileInfo(),
     limits: LIMITS,
   };
 }
 
 /** 单个会话的快照（面板用）。也带上通用层，因为两者一起才是真实注入文本。 */
 function snapshotOf(sessionId) {
-  const state = loadState();
-  const rules = readRules(sessionId);
-  const common = readCommonRules();
-  const enabled = isSessionEnabled(state, sessionId, rules);
+  const fence = loadFence();
+  const own = sessionRules(fence, sessionId);
   const rendered = fenceTextFor(sessionId);
   return {
     ok: true,
     scope: 'session',
     sessionId,
-    enabled,
-    globalEnabled: state.global.enabled === true,
-    common: { rules: common, dir: COMMON_DIR },
-    rules,
+    enabled: isSessionEnabled(fence, sessionId, own),
+    globalEnabled: fence.enabled === true,
+    common: { rules: rulesView(commonRules(fence)), ...fileInfo() },
+    rules: rulesView(own),
     rendered,
     chars: rendered.length,
     tokens: tokenEstimate(rendered),
-    dir: sessionDirOf(sessionId),
+    ...fileInfo(),
     limits: LIMITS,
   };
 }
 
-/** 会话清单（设置页用）。目录里有 txt 的会话与 state.json 里登记过的会话取并集。 */
-function knownSessions(state) {
-  const ids = new Set(Object.keys(state.sessions));
-  let dirs = [];
-  try {
-    dirs = fs.readdirSync(SESSIONS_DIR, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
-  } catch {
-    dirs = [];
-  }
-  for (const dir of dirs) if (sanitizeSessionId(dir) !== '') ids.add(dir);
+/** 会话清单（面板用；不作为设置页主视图）。 */
+function knownSessions(fence) {
   const rows = [];
-  for (const sessionId of ids) {
-    const rules = readRules(sessionId);
+  for (const [sessionId, entry] of Object.entries(fence.sessions ?? {})) {
+    if (sanitizeSessionId(sessionId) === '') continue;
+    const rules = Array.isArray(entry?.rules) ? entry.rules : [];
     rows.push({
       sessionId,
-      enabled: isSessionEnabled(state, sessionId, rules),
+      enabled: entry?.enabled !== false && rules.length > 0,
       ruleCount: rules.length,
-      chars: rules.reduce((sum, rule) => sum + rule.text.length, 0),
+      chars: rules.reduce((sum, text) => sum + text.length, 0),
     });
   }
   rows.sort((left, right) => left.sessionId.localeCompare(right.sessionId));
   return rows;
 }
 
-/** 设置页快照（插件页那一栏用）。主视图是通用规则层，会话清单降到次要位置。 */
+/** 设置页快照（插件页那一栏用）。主视图是通用规则层。 */
 function overviewOf() {
-  const state = loadState();
-  const common = readCommonRules();
-  const globalEnabled = state.global.enabled === true;
-  const rendered = globalEnabled ? renderRuleTexts(common.map((rule) => rule.text)) : '';
+  const fence = loadFence();
+  const common = rulesView(commonRules(fence));
+  const rendered = fence.enabled === true ? renderRuleTexts(commonRules(fence)) : '';
   return {
     ok: true,
-    globalEnabled,
+    globalEnabled: fence.enabled === true,
     common: {
       rules: common,
       rendered,
       chars: rendered.length,
       tokens: tokenEstimate(rendered),
-      dir: COMMON_DIR,
+      ...fileInfo(),
     },
-    dataDir: DATA_DIR,
-    commonDir: COMMON_DIR,
-    sessionsDir: SESSIONS_DIR,
-    stateFile: STATE_FILE,
-    sessions: knownSessions(state),
+    dataDir: path.dirname(fenceFile()),
+    ...fileInfo(),
+    sessions: knownSessions(fence),
     limits: LIMITS,
   };
 }
 
-function setGlobal(state, enabled) {
-  state.global.enabled = enabled === true;
-  saveState(state);
-}
-
-/**
- * 规则的读写目标：通用层（所有对话）或某个会话层。
- * scope === 'common' 时不需要 sessionId。
- */
-function targetOf(scope, sessionId) {
-  if (scope === 'common') {
-    return {
-      scope: 'common',
-      dir: COMMON_DIR,
-      list: () => listRuleFilesIn(COMMON_DIR),
-      snapshot: () => commonSnapshotOf(),
-      write: (file, text) => writeCommonRuleFile(file, text),
-      remove: (file) => removeCommonRuleFile(file),
-      clear: () => clearCommonRuleFiles(),
-      enable: () => true,
-    };
+/** 打开围栏文件所在文件夹（桌面形态可用；测试用 DIALOG_FENCE_NO_OPEN 关掉）。 */
+function openFolder(target) {
+  const dir = path.dirname(target);
+  if (process.env.DIALOG_FENCE_NO_OPEN === '1') return { ok: true, opened: false, dir, reason: 'test-mode' };
+  try {
+    if (process.platform === 'win32') {
+      // /select 会打开资源管理器并选中该文件；文件不存在时退化为打开目录。
+      const args = fs.existsSync(target) ? ['/select,', target] : [dir];
+      childProcess.spawn('explorer.exe', args, { detached: true, stdio: 'ignore' }).unref();
+    } else if (process.platform === 'darwin') {
+      childProcess.spawn('open', ['-R', target], { detached: true, stdio: 'ignore' }).unref();
+    } else {
+      childProcess.spawn('xdg-open', [dir], { detached: true, stdio: 'ignore' }).unref();
+    }
+    return { ok: true, opened: true, dir };
+  } catch (error) {
+    return { ok: false, error: `无法打开文件夹: ${error?.message ?? error}`, dir };
   }
-  return {
-    scope: 'session',
-    sessionId,
-    dir: sessionDirOf(sessionId),
-    list: () => listRuleFiles(sessionId),
-    snapshot: () => snapshotOf(sessionId),
-    write: (file, text) => writeRuleFile(sessionId, file, text),
-    remove: (file) => removeRuleFile(sessionId, file),
-    clear: () => clearRuleFiles(sessionId),
-    enable: () => true,
-  };
 }
 
-/** 面板提交的动作；与 /fence 命令共用同一套文件，改完下一轮即生效。 */
+/** 把围栏文件搬到新位置，并把 location.json 指针指过去。 */
+function moveFenceFile(target) {
+  if (typeof target !== 'string' || target.trim().length === 0) return { ok: false, error: '需要绝对路径' };
+  const resolved = target.trim();
+  if (!path.isAbsolute(resolved)) return { ok: false, error: '必须使用绝对路径（例如 D:\\我的围栏\\fence.json）' };
+  let finalPath = resolved;
+  try {
+    if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) finalPath = path.join(resolved, 'fence.json');
+  } catch {
+    /* 探测失败就按文件路径处理 */
+  }
+  if (!/\.json$/i.test(finalPath)) return { ok: false, error: '目标文件名需以 .json 结尾' };
+  const current = fenceFile();
+  try {
+    if (path.resolve(finalPath) !== path.resolve(current)) {
+      fs.mkdirSync(path.dirname(finalPath), { recursive: true });
+      if (!fs.existsSync(finalPath)) {
+        // 把当前数据搬过去；目标已存在则不覆盖，直接切换（用户显式指定）。
+        const fence = loadFence();
+        fs.writeFileSync(finalPath, `${JSON.stringify(fence, null, 2)}\n`, 'utf8');
+      }
+      writeLocation(finalPath);
+      fenceCache = { mtimeMs: -1, size: -1, fence: null };
+    }
+  } catch (error) {
+    return { ok: false, error: `切换位置失败: ${error?.message ?? error}` };
+  }
+  return { ok: true, ...fileInfo() };
+}
+
+/** 面板提交的动作；与 /fence 命令共用同一个文件，改完下一轮即生效。 */
 function applyAction(sessionId, action, payload) {
-  const state = loadState();
+  const fence = loadFence();
   const scope = payload?.scope === 'common' ? 'common' : 'session';
+  const texts = scope === 'common' ? commonRules(fence) : null;
 
   // 总开关与任何会话无关，必须在会话 id 校验之前处理。
-  if (action === 'toggleGlobal') {
-    setGlobal(state, payload.enabled);
+  if (action === 'toggleGlobal' || action === 'switch') {
+    fence.enabled = payload.enabled !== false;
+    saveFence(fence);
     return overviewOf();
+  }
+  if (action === 'setFile') {
+    const moved = moveFenceFile(typeof payload.file === 'string' ? payload.file : '');
+    if (moved.ok === false) return { ok: false, error: moved.error };
+    return overviewOf();
+  }
+  if (action === 'openFolder') {
+    const opened = openFolder(fenceFile());
+    if (opened.ok === false) return { ok: false, error: opened.error };
+    return { ...overviewOf(), opened: opened.opened === true, openReason: opened.reason ?? null };
   }
 
   if (scope === 'session' && sessionId === '') return { ok: false, error: '缺少会话 id' };
-  const target = targetOf(scope, sessionId);
+  // 必须拿到**挂在 fence 上的那个数组**：sessionRules() 在会话没有条目时返回的是临时空数组，
+  // 往里 push 改不到 fence（0.7.0 首次实现的 bug：新会话 add 静默无效）。
+  const list = scope === 'common' ? texts : sessionEntry(fence, sessionId).rules;
 
   if (action === 'toggle') {
     if (scope === 'common') {
-      setGlobal(state, payload.enabled);
-      return commonSnapshotOf();
+      fence.enabled = payload.enabled !== false;
+    } else {
+      sessionEntry(fence, sessionId).enabled = payload.enabled !== false;
     }
-    const entry = state.sessions[sessionId];
-    state.sessions[sessionId] = { enabled: payload.enabled === true };
-    saveState(state);
-    if (entry === undefined && state.sessions[sessionId].enabled) {
-      /* 首次启用只需登记，规则文件按需创建 */
-    }
-    return snapshotOf(sessionId);
+    saveFence(fence);
+    return scope === 'common' ? commonSnapshotOf() : snapshotOf(sessionId);
   }
+
+  const pushText = (text) => {
+    if (text.length === 0) return '规则文本不能为空';
+    if (text.length > MAX_RULE_CHARS) return `单条规则最多 ${MAX_RULE_CHARS} 字符（当前 ${text.length}）`;
+    if (list.some((existing) => existing === text)) return '';
+    if (list.length >= MAX_RULES) return `规则已达上限 ${MAX_RULES} 条`;
+    list.push(text);
+    return '';
+  };
+
   if (action === 'add') {
-    const text = typeof payload.text === 'string' ? payload.text.trim() : '';
-    if (text.length === 0) return { ok: false, error: '规则文本不能为空' };
-    if (text.length > MAX_RULE_CHARS) return { ok: false, error: `单条规则最多 ${MAX_RULE_CHARS} 字符（当前 ${text.length}）` };
-    const existing = readRulesIn(target.dir);
-    if (existing.some((rule) => rule.text === text)) return target.snapshot();
-    if (existing.length >= MAX_RULES) return { ok: false, error: `规则已达上限 ${MAX_RULES} 条` };
-    target.write(undefined, text);
-    if (scope === 'session') {
-      state.sessions[sessionId] = { enabled: true };
-      saveState(state);
-    }
-    return target.snapshot();
+    const error = pushText(normalizeText(payload.text));
+    if (error !== '') return { ok: false, error };
+    if (scope === 'session') sessionEntry(fence, sessionId).enabled = true;
+    saveFence(fence);
+    return scope === 'common' ? commonSnapshotOf() : snapshotOf(sessionId);
   }
+
+  const index = Number.parseInt(String(payload.index ?? ''), 10);
+  const valid = Number.isInteger(index) && index >= 0 && index < list.length;
+
   if (action === 'update') {
-    const text = typeof payload.text === 'string' ? payload.text.trim() : '';
-    const file = typeof payload.file === 'string' ? payload.file : '';
-    if (file === '') return { ok: false, error: '缺少规则文件名' };
+    if (!valid) return { ok: false, error: `没有第 ${payload.index} 条规则` };
+    const text = normalizeText(payload.text);
     if (text.length === 0) return { ok: false, error: '规则文本不能为空' };
     if (text.length > MAX_RULE_CHARS) return { ok: false, error: `单条规则最多 ${MAX_RULE_CHARS} 字符（当前 ${text.length}）` };
-    // 只允许改已存在的规则文件：否则一个拼错的文件名会凭空多出一条规则。
-    if (!target.list().some((row) => row.file === path.basename(file))) {
-      return { ok: false, error: `没有找到规则文件 ${file}` };
-    }
-    target.write(file, text);
-    if (scope === 'session' && state.sessions[sessionId] === undefined) {
-      state.sessions[sessionId] = { enabled: true };
-      saveState(state);
-    }
-    return target.snapshot();
+    list[index] = text;
+    saveFence(fence);
+    return scope === 'common' ? commonSnapshotOf() : snapshotOf(sessionId);
   }
   if (action === 'remove') {
-    const file = typeof payload.file === 'string' ? payload.file : '';
-    if (file === '') return { ok: false, error: '缺少规则文件名' };
-    if (!target.remove(file)) return { ok: false, error: `没有找到规则文件 ${file}` };
-    return target.snapshot();
+    if (!valid) return { ok: false, error: `没有第 ${payload.index} 条规则` };
+    list.splice(index, 1);
+    saveFence(fence);
+    return scope === 'common' ? commonSnapshotOf() : snapshotOf(sessionId);
   }
   if (action === 'clear') {
-    target.clear();
-    return target.snapshot();
+    list.length = 0;
+    saveFence(fence);
+    return scope === 'common' ? commonSnapshotOf() : snapshotOf(sessionId);
   }
   if (action === 'reset') {
     if (scope === 'common') {
-      clearCommonRuleFiles();
-      return commonSnapshotOf();
+      fence.rules = [];
+    } else {
+      delete fence.sessions[sessionId];
     }
-    clearRuleFiles(sessionId);
-    delete state.sessions[sessionId];
-    saveState(state);
-    return snapshotOf(sessionId);
+    saveFence(fence);
+    return scope === 'common' ? commonSnapshotOf() : snapshotOf(sessionId);
   }
   return { ok: false, error: `未知动作 ${action}` };
 }
@@ -662,9 +712,9 @@ async function handleApi(request) {
     return jsonResponse({ ok: false, error: '请求体必须是 JSON' }, 400);
   }
   const action = typeof body?.action === 'string' ? body.action : '';
-  if (action === 'toggleGlobal') {
+  if (action === 'toggleGlobal' || action === 'switch' || action === 'setFile' || action === 'openFolder') {
     const snapshot = applyAction('', action, body ?? {});
-    return jsonResponse(snapshot);
+    return snapshot.ok === false ? jsonResponse(snapshot, 400) : jsonResponse(snapshot);
   }
   // 通用规则层：不需要 sessionId。
   if (body?.scope === 'common') {
@@ -681,29 +731,36 @@ async function handleApi(request) {
 // 命令：/fence
 // ---------------------------------------------------------------------------
 
+function fileLinesFor(prefix) {
+  return [
+    `${prefix}围栏文件: ${fenceFile()}`,
+    `${prefix}所在目录: ${fenceDir()}`,
+    `${prefix}位置指针: ${LOCATION_FILE}`,
+  ];
+}
+
 function statusText(sessionId) {
-  const state = loadState();
-  const rules = readRules(sessionId);
-  const common = readCommonRules();
-  const enabled = isSessionEnabled(state, sessionId, rules);
+  const fence = loadFence();
+  const own = sessionRules(fence, sessionId);
+  const common = commonRules(fence);
+  const enabled = isSessionEnabled(fence, sessionId, own);
   const text = fenceTextFor(sessionId);
   const lines = [
     `/fence status — 会话 ${sessionId}`,
-    `全局开关: ${state.global.enabled === true ? '开' : '关（所有会话都不注入）'}`,
+    `总开关: ${fence.enabled === true ? '开' : '关（所有对话都不注入）'}`,
     `通用规则: ${common.length} 条（对所有对话生效）`,
     `本会话: ${enabled ? '已启用' : '未启用（本会话专属规则不注入）'}`,
-    `本会话专属规则: ${rules.length} 条`,
+    `本会话专属规则: ${own.length} 条`,
     `实际注入: ${text.length} 字符 ≈ ${tokenEstimate(text)} token`,
-    `目录: ${sessionDirOf(sessionId)}`,
-    `通用规则目录: ${COMMON_DIR}`,
+    ...fileLinesFor(''),
   ];
   if (common.length > 0) {
-    lines.push('通用规则清单（文件名 → 正文）:');
-    common.forEach((rule, index) => lines.push(`  ${index + 1}. [${rule.file}] ${rule.text}`));
+    lines.push('通用规则清单:');
+    common.forEach((text, index) => lines.push(`  ${index + 1}. ${text}`));
   }
-  if (rules.length > 0) {
-    lines.push('本会话专属规则清单（文件名 → 正文）:');
-    rules.forEach((rule, index) => lines.push(`  ${index + 1}. [${rule.file}] ${rule.text}`));
+  if (own.length > 0) {
+    lines.push('本会话专属规则清单:');
+    own.forEach((text, index) => lines.push(`  ${index + 1}. ${text}`));
   }
   if (text.length > 0) {
     lines.push('实际注入（每次快照变化才重新追加一次）:');
@@ -717,20 +774,23 @@ function statusText(sessionId) {
 const HELP = [
   '/fence                      显示状态',
   '/fence on | off             启用 / 停用本会话专属规则',
-  '/fence add <规则文本>       新建一条本会话专属规则（= 一个 txt 文件）',
+  '/fence add <规则文本>       新建一条本会话专属规则',
   '/fence rm <序号>            删除第 N 条本会话专属规则',
-  '/fence clear                清空本会话专属规则文件',
+  '/fence clear                清空本会话专属规则',
   '/fence reset                清空本会话规则并删除开关登记',
-  '/fence dir                  显示本会话规则目录与通用规则目录',
+  '/fence dir                  显示围栏文件路径',
   '',
   '/fence all                  显示通用规则（对每个对话都生效）',
   '/fence all add <规则文本>   新建一条通用规则',
   '/fence all rm <序号>        删除第 N 条通用规则',
   '/fence all clear            清空通用规则',
   '',
-  '通用规则 rules/common/NN-*.txt 对每个对话都生效；',
-  '会话规则 rules/sessions/<会话 id>/NN-*.txt 只对该会话生效，叠加在通用规则之后。',
-  '改文件内容即改规则，下一轮生效。',
+  '/fence switch on | off      总开关（关掉后所有对话都不注入）',
+  '/fence file <绝对路径>      把围栏文件换到别的位置',
+  '/fence open                 打开围栏文件所在文件夹',
+  '',
+  '全部规则都存在同一个 JSON 文件里（默认 <home>/dialog-fence/fence.json），',
+  '可以直接用任何编辑器改内容，下一轮生效。',
 ].join('\n');
 
 function succeed(text) {
@@ -748,48 +808,55 @@ function handleFenceCommon(argument) {
   const text = argument.length === 0 ? '' : argument.slice(verbRaw.length).trim();
 
   if (verb === '' || verb === 'status' || verb === 'show') return succeed(commonStatusText());
-  if (verb === 'dir') return succeed(`通用规则目录:\n${COMMON_DIR}`);
+  if (verb === 'dir' || verb === 'file') return succeed(fileLinesFor('通用规则 ').join('\n'));
+  if (verb === 'open') {
+    const opened = openFolder(fenceFile());
+    if (opened.ok === false) return fail(opened.error);
+    return succeed(`已打开围栏文件夹:\n${opened.dir}`);
+  }
+
+  const fence = loadFence();
+  const list = commonRules(fence);
 
   if (verb === 'add') {
     if (text.length === 0) return fail('/fence all add 需要规则文本');
     if (text.length > MAX_RULE_CHARS) return fail(`单条规则最多 ${MAX_RULE_CHARS} 字符（当前 ${text.length}）`);
-    const existing = readCommonRules();
-    if (existing.some((rule) => rule.text === text)) return succeed(`该通用规则已存在，未重复添加。\n${commonStatusText()}`);
-    if (existing.length >= MAX_RULES) return fail(`通用规则已达上限 ${MAX_RULES} 条`);
-    const file = writeCommonRuleFile(undefined, text);
-    return succeed(`已写入通用规则 ${file}\n${commonStatusText()}`);
+    if (list.some((existing) => existing === text)) return succeed(`该通用规则已存在，未重复添加。\n${commonStatusText()}`);
+    if (list.length >= MAX_RULES) return fail(`通用规则已达上限 ${MAX_RULES} 条`);
+    list.push(text);
+    saveFence(fence);
+    return succeed(`已添加通用规则（第 ${list.length} 条）\n${commonStatusText()}`);
   }
 
   if (verb === 'rm' || verb === 'remove' || verb === 'del') {
     const index = Number.parseInt(text, 10);
-    const rules = readCommonRules();
-    if (!Number.isInteger(index) || index < 1 || index > rules.length) {
-      return fail(`/fence all rm 需要 1..${rules.length} 之间的序号`);
-    }
-    const target = rules[index - 1];
-    removeCommonRuleFile(target.file);
-    return succeed(`已删除通用规则 ${target.file}: ${target.text}\n${commonStatusText()}`);
+    if (!Number.isInteger(index) || index < 1 || index > list.length) return fail(`/fence all rm 需要 1..${list.length} 之间的序号`);
+    const removed = list.splice(index - 1, 1)[0];
+    saveFence(fence);
+    return succeed(`已删除通用规则: ${removed}\n${commonStatusText()}`);
   }
 
   if (verb === 'clear') {
-    const removed = clearCommonRuleFiles();
-    return succeed(`已删除 ${removed} 个通用规则文件。\n${commonStatusText()}`);
+    const removed = list.length;
+    fence.rules = [];
+    saveFence(fence);
+    return succeed(`已清空 ${removed} 条通用规则。\n${commonStatusText()}`);
   }
 
   return fail(`未知子命令 "all ${verbRaw}"。\n${HELP}`);
 }
 
 function commonStatusText() {
-  const state = loadState();
-  const rules = readCommonRules();
-  const text = state.global.enabled === true ? renderRuleTexts(rules.map((rule) => rule.text)) : '';
+  const fence = loadFence();
+  const rules = commonRules(fence);
+  const text = fence.enabled === true ? renderRuleTexts(rules) : '';
   const lines = [
-    `/fence all — 通用规则（对每个对话都生效）`,
-    `全局开关: ${state.global.enabled === true ? '开' : '关（所有会话都不注入）'}`,
+    '/fence all — 通用规则（对每个对话都生效）',
+    `总开关: ${fence.enabled === true ? '开' : '关（所有对话都不注入）'}`,
     `规则: ${rules.length} 条，注入文本 ${text.length} 字符 ≈ ${tokenEstimate(text)} token`,
-    `目录: ${COMMON_DIR}`,
+    ...fileLinesFor(''),
   ];
-  rules.forEach((rule, index) => lines.push(`  ${index + 1}. [${rule.file}] ${rule.text}`));
+  rules.forEach((rule, index) => lines.push(`  ${index + 1}. ${rule}`));
   return lines.join('\n');
 }
 
@@ -803,54 +870,74 @@ function handleFence(invocation) {
   // 通用规则层与当前会话无关，先分流。
   if (verb === 'all' || verb === 'common' || verb === 'global') return handleFenceCommon(argument);
   if (verb === 'help' || verb === '?') return succeed(HELP);
+
+  // 总开关 / 换位置 / 打开文件夹都不需要会话 id。
+  if (verb === 'switch') {
+    const value = argument.toLowerCase();
+    if (value !== 'on' && value !== 'off') return fail('/fence switch 需要 on 或 off');
+    const fence = loadFence();
+    fence.enabled = value === 'on';
+    saveFence(fence);
+    return succeed(commonStatusText());
+  }
+  if (verb === 'file' || verb === 'path') {
+    if (argument.length === 0) return succeed(fileLinesFor('').join('\n'));
+    const moved = moveFenceFile(argument);
+    if (moved.ok === false) return fail(moved.error);
+    return succeed(`围栏文件已切换到:\n${moved.file}\n\n所在目录:\n${moved.dir}`);
+  }
+  if (verb === 'open') {
+    const opened = openFolder(fenceFile());
+    if (opened.ok === false) return fail(opened.error);
+    return succeed(`已打开围栏文件夹:\n${opened.dir}\n\n围栏文件: ${fenceFile()}`);
+  }
+
   if (sessionId === '') return fail('/fence: 无法确定当前会话 id');
 
-  const state = loadState();
+  const fence = loadFence();
 
   if (verb === '' || verb === 'status' || verb === 'show') return succeed(statusText(sessionId));
-  if (verb === 'dir') {
-    return succeed(`本会话规则目录:\n${sessionDirOf(sessionId)}\n\n通用规则目录:\n${COMMON_DIR}\n\n全局状态文件:\n${STATE_FILE}`);
-  }
+  if (verb === 'dir') return succeed(fileLinesFor('').join('\n'));
 
   if (verb === 'on' || verb === 'off') {
-    state.sessions[sessionId] = { enabled: verb === 'on' };
-    saveState(state);
+    sessionEntry(fence, sessionId).enabled = verb === 'on';
+    saveFence(fence);
     return succeed(statusText(sessionId));
   }
+
+  const own = sessionRules(fence, sessionId);
 
   if (verb === 'add') {
     if (argument.length === 0) return fail('/fence add 需要规则文本');
     if (argument.length > MAX_RULE_CHARS) return fail(`单条规则最多 ${MAX_RULE_CHARS} 字符（当前 ${argument.length}）`);
-    const existing = readRules(sessionId);
-    if (existing.some((rule) => rule.text === argument)) return succeed(`该规则已存在，未重复添加。\n${statusText(sessionId)}`);
-    if (existing.length >= MAX_RULES) return fail(`规则已达上限 ${MAX_RULES} 条，请先 /fence rm <序号>`);
-    const file = writeRuleFile(sessionId, undefined, argument);
-    state.sessions[sessionId] = { enabled: true };
-    saveState(state);
-    return succeed(`已写入 ${file}\n${statusText(sessionId)}`);
+    if (own.some((existing) => existing === argument)) return succeed(`该规则已存在，未重复添加。\n${statusText(sessionId)}`);
+    if (own.length >= MAX_RULES) return fail(`规则已达上限 ${MAX_RULES} 条，请先 /fence rm <序号>`);
+    sessionEntry(fence, sessionId).rules.push(argument);
+    sessionEntry(fence, sessionId).enabled = true;
+    saveFence(fence);
+    return succeed(`已添加本会话专属规则（第 ${own.length + 1} 条）\n${statusText(sessionId)}`);
   }
 
   if (verb === 'rm' || verb === 'remove' || verb === 'del') {
     const index = Number.parseInt(argument, 10);
-    const rules = readRules(sessionId);
-    if (!Number.isInteger(index) || index < 1 || index > rules.length) {
-      return fail(`/fence rm 需要 1..${rules.length} 之间的序号`);
-    }
-    const target = rules[index - 1];
-    removeRuleFile(sessionId, target.file);
-    return succeed(`已删除 ${target.file}: ${target.text}\n${statusText(sessionId)}`);
+    if (!Number.isInteger(index) || index < 1 || index > own.length) return fail(`/fence rm 需要 1..${own.length} 之间的序号`);
+    const removed = own.splice(index - 1, 1)[0];
+    saveFence(fence);
+    return succeed(`已删除: ${removed}\n${statusText(sessionId)}`);
   }
 
   if (verb === 'clear') {
-    const removed = clearRuleFiles(sessionId);
-    return succeed(`已删除 ${removed} 个规则文件。\n${statusText(sessionId)}`);
+    const removed = own.length;
+    sessionEntry(fence, sessionId).rules = [];
+    saveFence(fence);
+    return succeed(`已删除 ${removed} 条本会话专属规则。\n${statusText(sessionId)}`);
   }
 
   if (verb === 'reset') {
-    const removed = clearRuleFiles(sessionId);
-    delete state.sessions[sessionId];
-    saveState(state);
-    return succeed(`已删除 ${removed} 个规则文件并清除本会话开关登记。\n${statusText(sessionId)}`);
+    const removed = own.length;
+    delete fence.sessions[sessionId];
+    saveFence(fence);
+    return succeed(`已删除 ${removed} 条本会话专属规则并清除开关登记。\n${statusText(sessionId)}`);
   }
 
   return fail(`未知子命令 "${verbRaw}"。\n${HELP}`);
@@ -861,13 +948,18 @@ function handleFence(invocation) {
 // ---------------------------------------------------------------------------
 
 async function apply(ctx) {
-  // 首次运行时把目录建好，用户点开就能看到 sessions / common 两个文件夹。
-  for (const dir of [SESSIONS_DIR, COMMON_DIR]) {
-    try {
-      fs.mkdirSync(dir, { recursive: true });
-    } catch {
-      /* 目录不可写时后面所有读写都会各自降级，这里不阻塞启动 */
-    }
+  // 首次启动：建好基目录（用户点「打开文件夹」时能看到东西），并把老数据迁移过来。
+  try {
+    fs.mkdirSync(BASE_DIR, { recursive: true });
+  } catch {
+    /* 目录不可写时后面所有读写都会各自降级，这里不阻塞启动 */
+  }
+  migrateLegacyIfNeeded();
+  // 围栏文件不存在时先落一份空的：用户点「打开文件夹」才看得到可编辑的文件。
+  try {
+    if (!fs.existsSync(fenceFile())) saveFence(loadFence());
+  } catch {
+    /* 写不了就等第一次真实写入 */
   }
 
   // 围栏文本：只读状态，异常一律降级为空字符串 —— 装配失败会直接毁掉整轮对话，
@@ -893,8 +985,8 @@ async function apply(ctx) {
     () =>
       ctx.commands.register({
         name: 'fence',
-        description: '围栏规则：给对话设置边界（通用规则对所有对话生效，每条规则一个 txt 文件）',
-        input: { hint: '[on|off|add <文本>|rm <序号>|clear|reset|dir|status|all ...]' },
+        description: '围栏规则：给对话设置边界（通用规则对所有对话生效，全部规则存在一个 JSON 文件里）',
+        input: { hint: '[on|off|add <文本>|rm <序号>|clear|reset|dir|status|all ...|switch on/off|file <路径>|open]' },
         handler: (invocation) => {
           try {
             return handleFence(invocation);
@@ -932,7 +1024,7 @@ async function apply(ctx) {
     console.log(`[dialog-fence] route ready: ${API_PATH}`);
   });
 
-  console.log(`[dialog-fence] ready: data=${DATA_DIR} context=${CONTEXT_NAME}@${CONTEXT_ORDER}`);
+  console.log(`[dialog-fence] ready: file=${fenceFile()} context=${CONTEXT_NAME}@${CONTEXT_ORDER}`);
 }
 
 export { apply, inject, name };

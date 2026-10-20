@@ -100,6 +100,8 @@ assert.match(pageMarkup, /开启围栏|关闭围栏/, 'global switch is actionab
 assert.match(pageMarkup, /读取中/, 'first frame shows the placeholder until the common layer arrives');
 assert.match(pageMarkup, /围栏规则（对每个对话生效）/, 'the rule list is the main view, not a session table');
 assert.match(pageMarkup, /dialog-fence-input/, 'has an inline editor for a new rule');
+assert.match(pageMarkup, /打开文件夹/, 'settings page can reveal the fence file');
+assert.match(pageMarkup, /更改位置/, 'settings page can move the fence file');
 assert.doesNotMatch(pageMarkup, /session-[0-9a-f]{8}-/, 'no session ids on the settings page');
 assert.doesNotMatch(pageMarkup, /<textarea/, 'no textarea anywhere');
 

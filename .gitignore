@@ -5,7 +5,11 @@ package-lock.json
 yarn.lock
 
 # 运行时生成的数据（含具体会话 id，不该进仓库）
-# 0.3.0 起：每条规则一个 txt，全部落在 rules/ 目录
+# 0.7.0 起：全部围栏数据在单个 fence.json 里（默认 <DSH_HOME>/dialog-fence/，不在本目录）
+# 0.3.0–0.6.x：每条规则一个 txt，全部落在 rules/ 目录
+fence.json
+fence.json.tmp
+location.json
 rules/
 !rules/.gitkeep
 
@@ -20,7 +24,8 @@ rules.json.migrated
 # 设计期的取证脚本（仅本地留档；仓库里没有它们运行起来也完全正常）
 probe/
 
-# 临时/日志
+# 临时文件与日志
+*.tmp
 *.log
 .DS_Store
 Thumbs.db

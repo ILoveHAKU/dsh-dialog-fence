@@ -105,7 +105,7 @@ assert.deepEqual(requested, ['react'], 'client bundle requires nothing but react
 assert.equal(typeof exportsObject.apply, 'function');
 assert.deepEqual(exportsObject.inject, ['slots']);
 
-// ---- 3) apply() 注册三处界面，且参数正确 -----------------------------------
+// ---- 3) apply() 注册五处界面，且参数正确 -----------------------------------
 const registrations = [];
 let injections = 0;
 const effects = [];
@@ -233,6 +233,29 @@ assert.equal(sectionClasses.has('dialog-fence-tr'), false, 'no per-session rows 
 const bundleTree = BundleConfig({ view: 'page' });
 assert.equal(bundleTree.type, 'div');
 assert.equal(bundleTree.props.className, 'dialog-fence-flat', 'page view inside a detail page drops the outer padding');
+
+// ---- 4.5) 0.7.0：单文件 JSON + 打开文件夹 + 自定义位置 ----------------------
+// 设置页与浮层面板都要有「打开文件夹」，设置页还要能改文件位置。
+assert.match(sectionText, /打开文件夹/, 'settings page offers a button that reveals the fence file');
+assert.match(sectionText, /更改位置/, 'settings page lets the user move the fence file');
+assert.match(source, /act\(undefined, 'openFolder'\)/, 'the open-folder button posts the openFolder action');
+assert.match(source, /act\(undefined, 'setFile', \{ file: target \}\)/, 'moving the file posts the setFile action');
+
+// 规则增删改一律按**序号**（单文件 JSON 里没有文件名这回事）
+assert.match(source, /act\(COMMON_SCOPE, 'update', \{ index: target, text \}\)/, 'common rules are updated by index');
+assert.match(source, /act\(COMMON_SCOPE, 'remove', \{ index: target \}\)/, 'common rules are removed by index');
+assert.match(source, /onSave\(rule\.index, text\)/, 'RuleRow reports the rule index, not a file name');
+assert.doesNotMatch(source, /onSave\(rule\.file/, 'RuleRow no longer passes a file name around');
+
+// 用户 CR-14 第 1 条：右上角按钮打开后要同步出现配置。
+// 面板挂载（含 openSessionId 变化）时必须同时拉本会话与通用层，否则设置页里刚改的规则不会出现。
+assert.match(source, /refreshAll\(\)/, 'the panel pulls the shared rule layer so it agrees with the settings page');
+assert.match(source, /if \(sessionId !== null\) \{\s*refresh\(sessionId\);\s*refreshAll\(\);/, 'opening the panel refreshes both the session and the common layer');
+assert.match(sectionText, /围栏规则（对每个对话生效）/, 'the panel shows the shared rules, not only the per-session ones');
+
+// 徽标数字必须是真实注入条数（通用 + 专属），否则配了 10 条通用规则时按钮还显示「1」，看着像没生效。
+assert.match(source, /const commonCount = common\?\.rules\?\.length \?\? 0;/, 'header badge counts the shared layer');
+assert.match(source, /const count = commonCount \+ sessionCount;/, 'header badge is shared + per-session, matching what is injected');
 
 // ---- 5) 面板里不再有 textarea，只有逐行的 input ------------------------------
 assert.doesNotMatch(source, /createElement\(\s*['"]textarea['"]/i, 'client bundle no longer creates a textarea');
