@@ -27,7 +27,9 @@ window.__ModuleLoader__.load({
     const API_ROUTE = '/api/dialog-fence'.slice(1);
     const SLOT_HEADER = 'conversation.session.header.utilities';
     const SLOT_OVERLAY = 'shell.overlay';
+    const SLOT_SETTINGS = 'settings.section';
     const SLOT_PLUGINS_TAB = 'settings.plugins.tab';
+    const SLOT_PLUGIN_ITEM = 'plugins.item';
 
     // ---------------------------------------------------------------------
     // 极小的外部 store：面板开合 + 各会话快照 + 全局概览
@@ -179,6 +181,8 @@ window.__ModuleLoader__.load({
       'word-break:break-all;line-height:1.5}',
       '.dialog-fence-page{display:flex;flex-direction:column;gap:14px;padding:16px;color:var(--dsw-alias-label-primary);',
       'font-size:13px;max-width:760px}',
+      '.dialog-fence-flat{display:flex;flex-direction:column;gap:14px;color:var(--dsw-alias-label-primary);',
+      'font-size:13px}',
       '.dialog-fence-card{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:12px 14px;',
       'display:flex;flex-direction:column;gap:8px;background:var(--dsw-alias-bg-layer-1)}',
       '.dialog-fence-card-head{display:flex;align-items:center;gap:10px}',
@@ -416,10 +420,27 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------------
-    // 3) 插件页（settings.plugins.tab）：全局开关 + 会话清单
+    // 3) 配置页：插件页（settings.plugins.tab / plugins.item）与设置左栏（settings.section）
     // ---------------------------------------------------------------------
 
-    function PluginsTab() {
+    function FenceItem(props) {
+      const view = props !== undefined && props !== null ? props.view : undefined;
+      if (view === 'summary') {
+        const snapshot = useExternalStore();
+        const overview = snapshot.overview;
+        const globalOn = overview === null || overview === undefined || overview.globalEnabled !== false;
+        const count = (overview?.sessions ?? []).length;
+        return react.createElement(
+          'span',
+          null,
+          `按会话注入的对话边界规则，每条规则一个 txt 文件。当前${globalOn ? '已开启' : '已关闭'}${count > 0 ? `，${count} 个会话配置过` : ''}。`,
+        );
+      }
+      return react.createElement(FencePage, { flat: true });
+    }
+
+    function FencePage(props) {
+      const flat = props !== undefined && props !== null && props.flat === true;
       const snapshot = useExternalStore();
       const overview = snapshot.overview;
       const busy = snapshot.busy === true;
@@ -433,7 +454,7 @@ window.__ModuleLoader__.load({
 
       return react.createElement(
         'div',
-        { className: 'dialog-fence-page' },
+        { className: flat ? 'dialog-fence-flat' : 'dialog-fence-page' },
         react.createElement(
           'div',
           { className: 'dialog-fence-card' },
@@ -522,16 +543,41 @@ window.__ModuleLoader__.load({
         'dialog-fence: overlay',
       );
 
-      // 插件页（设置 → 内置插件）：dsh web 与 DSH Desktop 都有这一区。
+      // (a) 设置左栏一级菜单项：设置 → 对话围栏（与「通知提醒」「bili 设置」同级）。
+      ctx.effect(
+        () =>
+          ctx.slots.inject(SLOT_SETTINGS, () =>
+            ctx.slots.register(
+              { name: SLOT_SETTINGS, id: 'dialog-fence', order: 50, label: () => '对话围栏' },
+              FencePage,
+            ),
+          ),
+        'dialog-fence: settings-section',
+      );
+
+      // (b) 设置 → 内置插件里的「对话围栏」标签页。
       ctx.effect(
         () =>
           ctx.slots.inject(SLOT_PLUGINS_TAB, () =>
             ctx.slots.register(
               { name: SLOT_PLUGINS_TAB, id: 'dialog-fence', order: 50, label: () => '对话围栏' },
-              PluginsTab,
+              FencePage,
             ),
           ),
         'dialog-fence: plugins-tab',
+      );
+
+      // (c) 左侧「插件」页 → 官方分组里的一张卡片（点开就是同一份配置界面）。
+      //     summary 视图只渲染一行说明；page 视图渲染完整表单。
+      ctx.effect(
+        () =>
+          ctx.slots.inject(SLOT_PLUGIN_ITEM, () =>
+            ctx.slots.register(
+              { name: SLOT_PLUGIN_ITEM, id: 'dialog-fence', order: 50, label: () => '对话围栏' },
+              FenceItem,
+            ),
+          ),
+        'dialog-fence: plugins-item',
       );
     }
 

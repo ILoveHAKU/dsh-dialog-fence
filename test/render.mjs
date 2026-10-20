@@ -69,10 +69,12 @@ clientExports.apply({
     },
   },
 });
-assert.equal(registrations.length, 3, 'header + overlay + plugins tab');
+assert.equal(registrations.length, 5, 'header + overlay + settings section + plugins tab + plugins item');
 const HeaderAction = registrations[0].component;
 const Panel = registrations[1].component;
-const PluginsTab = registrations[2].component;
+const FencePage = registrations[2].component;
+const PluginsTab = registrations[3].component;
+const FenceItem = registrations[4].component;
 
 // ---- 1) 头部按钮：真 hooks 下渲染 ------------------------------------------
 const headerMarkup = renderToStaticMarkup(React.createElement(HeaderAction, { sessionId: 'session-render-1' }));
@@ -86,14 +88,28 @@ assert.doesNotMatch(headerMarkup, /dialog-fence-badge/, 'no badge when the sessi
 // ---- 2) 浮层面板：未打开任何会话时返回 null（不占 DOM）---------------------
 assert.equal(renderToStaticMarkup(React.createElement(Panel)), '', 'overlay renders nothing while closed');
 
-// ---- 3) 插件页：首帧（overview 尚未返回）也要渲染总开关骨架 -------------------
+// ---- 3) 配置页：首帧（overview 尚未返回）也要渲染总开关骨架 -------------------
+const pageMarkup = renderToStaticMarkup(React.createElement(FencePage));
+console.log(`   settings section: ${pageMarkup.slice(0, 160)}…`);
+assert.match(pageMarkup, /class="dialog-fence-page"/, 'settings section renders its page container');
+assert.match(pageMarkup, /对话围栏/, 'settings section shows the plugin title');
+assert.match(pageMarkup, /总开关/, 'settings section exposes the global switch');
+assert.match(pageMarkup, /开启围栏|关闭围栏/, 'global switch is actionable');
+assert.doesNotMatch(pageMarkup, /读取中/, 'the settings section does not render a "loading" placeholder');
+assert.doesNotMatch(pageMarkup, /<textarea/, 'no textarea anywhere');
+
+// 插件页标签页复用同一个组件
 const tabMarkup = renderToStaticMarkup(React.createElement(PluginsTab));
-console.log(`   plugins tab: ${tabMarkup.slice(0, 160)}…`);
 assert.match(tabMarkup, /class="dialog-fence-page"/, 'plugins tab renders its page container');
-assert.match(tabMarkup, /对话围栏/, 'plugins tab shows the plugin title');
-assert.match(tabMarkup, /总开关/, 'plugins tab exposes the global switch');
-assert.match(tabMarkup, /开启围栏|关闭围栏/, 'global switch is actionable');
-assert.doesNotMatch(tabMarkup, /读取中/, 'the plugins tab does not render a "loading" placeholder');
-assert.doesNotMatch(tabMarkup, /<textarea/, 'no textarea anywhere');
+
+// ---- 4) plugins.item 的两种视图 --------------------------------------------
+const summaryMarkup = renderToStaticMarkup(React.createElement(FenceItem, { view: 'summary' }));
+console.log(`   plugins item summary: ${summaryMarkup}`);
+assert.match(summaryMarkup, /对话边界规则/, 'summary is a one-liner describing the fence');
+assert.doesNotMatch(summaryMarkup, /dialog-fence-card/, 'summary view stays on one line');
+
+const itemPageMarkup = renderToStaticMarkup(React.createElement(FenceItem, { view: 'page' }));
+assert.match(itemPageMarkup, /class="dialog-fence-flat"/, 'page view renders the flat config UI');
+assert.match(itemPageMarkup, /总开关/, 'page view carries the global switch');
 
 console.log('OK all dialog-fence render assertions passed');

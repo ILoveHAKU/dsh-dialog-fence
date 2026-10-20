@@ -9,6 +9,7 @@
  *   3. 检查导出的 apply / inject 形态，并用假 ctx 跑一遍 apply。
  *
  * 0.3.0 起有三处界面：会话头部按钮、浮层面板、插件页（settings.plugins.tab）。
+ * 0.4.0 起再加两处：设置左栏一级菜单（settings.section）、插件页官方分组卡片（plugins.item）。
  *
  * 这一步只保证 bundle 语法正确、产物形状正确、slot 注册参数正确；
  * 真正的视觉与交互需要重启 DSH 后在浏览器里看。
@@ -134,9 +135,15 @@ assert.match(styles[0].textContent, /\.dialog-fence-input/, 'css covers the inli
 assert.doesNotMatch(styles[0].textContent, /textarea/i, 'no textarea styling remains');
 assert.ok(styles[0].dataset.pluginCss, 'style tag is tagged for de-duplication');
 
-assert.deepEqual(effects, ['dialog-fence: header', 'dialog-fence: overlay', 'dialog-fence: plugins-tab']);
-assert.equal(injections, 3, 'all slots go through slots.inject (waits for declaration)');
-assert.equal(registrations.length, 3);
+assert.deepEqual(effects, [
+  'dialog-fence: header',
+  'dialog-fence: overlay',
+  'dialog-fence: settings-section',
+  'dialog-fence: plugins-tab',
+  'dialog-fence: plugins-item',
+]);
+assert.equal(injections, 5, 'all slots go through slots.inject (waits for declaration)');
+assert.equal(registrations.length, 5);
 
 const { spec: headerSpec, component: HeaderAction } = registrations[0];
 assert.equal(headerSpec.name, 'conversation.session.header.utilities');
@@ -149,13 +156,31 @@ assert.equal(overlaySpec.name, 'shell.overlay');
 assert.equal(overlaySpec.id, 'dialog-fence-panel');
 assert.equal(typeof Panel, 'function');
 
-const { spec: tabSpec, component: PluginsTab } = registrations[2];
+// 设置左栏一级菜单项（用户 CR-06 要的位置：设置 → 对话围栏）
+const { spec: sectionSpec, component: FencePage } = registrations[2];
+assert.equal(sectionSpec.name, 'settings.section', 'appears in the Settings left nav');
+assert.equal(sectionSpec.id, 'dialog-fence', 'own section id, adds a nav row instead of replacing one');
+assert.equal(typeof sectionSpec.order, 'number');
+assert.equal(typeof sectionSpec.label, 'function', 'label is a thunk so it follows the locale');
+assert.equal(sectionSpec.label(), '对话围栏');
+assert.equal(typeof FencePage, 'function');
+
+const { spec: tabSpec, component: PluginTab } = registrations[3];
 assert.equal(tabSpec.name, 'settings.plugins.tab', 'appears in the Plugins settings section');
 assert.equal(tabSpec.id, 'dialog-fence', 'own tab id, adds a cell instead of replacing one');
 assert.equal(typeof tabSpec.order, 'number');
 assert.equal(typeof tabSpec.label, 'function', 'label is a thunk so it follows the locale');
 assert.equal(tabSpec.label(), '对话围栏');
-assert.equal(typeof PluginsTab, 'function');
+assert.equal(typeof PluginTab, 'function');
+
+// 左侧「插件」页的卡片（view==='summary' 是一行说明，view==='page' 是完整表单）
+const { spec: itemSpec, component: FenceItem } = registrations[4];
+assert.equal(itemSpec.name, 'plugins.item', 'appears as a card on the Plugins page');
+assert.equal(itemSpec.id, 'dialog-fence', 'own card id, joins the Official group');
+assert.equal(typeof itemSpec.order, 'number');
+assert.equal(typeof itemSpec.label, 'function');
+assert.equal(itemSpec.label(), '对话围栏');
+assert.equal(typeof FenceItem, 'function');
 
 // ---- 4) 组件能在「未读取到数据」与「有数据」两种状态下渲染而不抛 ---------------
 const headerTree = HeaderAction({ sessionId: 'session-x' });
@@ -166,10 +191,18 @@ assert.equal(headerTree.props.className, 'dialog-fence-trigger');
 // Panel 在没打开任何会话时返回 null（浮层不占 DOM）
 assert.equal(Panel(), null);
 
-// 插件页第一帧（还没拉到 overview）也要能渲染
-const tabTree = PluginsTab();
-assert.equal(tabTree.type, 'div');
-assert.equal(tabTree.props.className, 'dialog-fence-page');
+// 配置页第一帧（还没拉到 overview）也要能渲染
+const sectionTree = FencePage();
+assert.equal(sectionTree.type, 'div');
+assert.equal(sectionTree.props.className, 'dialog-fence-page');
+
+// plugins.item 的两个视图
+const summaryTree = FenceItem({ view: 'summary' });
+assert.equal(summaryTree.type, 'span', 'summary view is the card one-liner');
+assert.match(String(summaryTree.children[0] ?? ''), /对话边界规则/, 'summary text explains what the fence is');
+const pageTree = FenceItem({ view: 'page' });
+assert.equal(pageTree.type, FencePage, 'page view delegates to the shared config page');
+assert.equal(pageTree.props.flat, true, 'page view asks for the flat (no outer padding) variant');
 
 // ---- 5) 面板里不再有 textarea，只有逐行的 input ------------------------------
 assert.doesNotMatch(source, /createElement\(\s*['"]textarea['"]/i, 'client bundle no longer creates a textarea');
