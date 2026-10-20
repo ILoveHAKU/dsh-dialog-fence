@@ -257,6 +257,19 @@ assert.match(sectionText, /围栏规则（对每个对话生效）/, 'the panel 
 assert.match(source, /const commonCount = common\?\.rules\?\.length \?\? 0;/, 'header badge counts the shared layer');
 assert.match(source, /const count = commonCount \+ sessionCount;/, 'header badge is shared + per-session, matching what is injected');
 
+// ---- 4.6) 0.8.0：「打开文件夹」必须把结果说出来 ----------------------------
+// 缺陷：act() 以前把 openFolder 的回包当成普通概览丢掉，opened/openReason/openWarning 全不读，
+// 于是「成功」「失败」「被系统拦掉」在界面上完全一样 —— 用户只会觉得点了没反应。
+assert.match(source, /function noticeOf\(snapshot\)/, 'openFolder results are translated into a message');
+assert.match(source, /notice: noticeOf\(snapshot\)/, 'act() stores the openFolder message');
+assert.match(source, /snapshot\.opened === false/, 'the client reads opened from the response');
+assert.match(source, /snapshot\.openWarning/, 'the client surfaces the deferred spawn failure');
+assert.match(source, /'data-notice': 'open-folder'/, 'the settings page renders the notice');
+// 三条结果必须能区分开
+assert.match(source, /'已打开围栏文件夹'/, 'success is stated explicitly');
+assert.match(source, /'测试模式：没有真的打开窗口'/, 'test-mode is reported, not silently ignored');
+assert.match(source, /上一次启动资源管理器失败/, 'a deferred spawn failure is reported');
+
 // ---- 5) 面板里不再有 textarea，只有逐行的 input ------------------------------
 assert.doesNotMatch(source, /createElement\(\s*['"]textarea['"]/i, 'client bundle no longer creates a textarea');
 assert.match(source, /dialog-fence-input/, 'inline input class is used for per-rule editing');

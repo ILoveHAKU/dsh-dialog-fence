@@ -50,6 +50,12 @@ window.__ModuleLoader__.load({
       overview: null,
       busy: false,
       error: null,
+      /**
+       * 「打开文件夹」这类没有可观察副作用的一次性动作的结果。
+       * 后端回包里有 opened / openReason / openWarning，以前全被丢掉，
+       * 于是成功、失败、被系统拦掉在界面上长得一模一样 —— 用户只会觉得「点了没反应」。
+       */
+      notice: null,
     };
 
     function emit() {
@@ -143,14 +149,37 @@ window.__ModuleLoader__.load({
       await Promise.all([refreshCommon(), refreshOverview()]);
     }
 
+    /**
+     * 把 openFolder 的回包翻译成一句人话。
+     * opened=false 只会在测试模式下发生（宿主设了 DIALOG_FENCE_NO_OPEN=1）；
+     * openWarning 是上一次 spawn 的异步失败 —— spawn 的错误是 'error' 事件，
+     * 晚于函数返回，所以只能延后一轮报告。
+     */
+    function noticeOf(snapshot) {
+      if (snapshot === null || snapshot === undefined) return null;
+      if (snapshot.opened === false) {
+        return snapshot.openReason === 'test-mode' ? '测试模式：没有真的打开窗口' : '没有打开窗口';
+      }
+      if (typeof snapshot.openWarning === 'string' && snapshot.openWarning.length > 0) {
+        return `已尝试打开文件夹，但上一次启动资源管理器失败：${snapshot.openWarning}`;
+      }
+      return '已打开围栏文件夹';
+    }
+
     /** 提交一个动作（toggle / toggleGlobal / add / update / remove / clear / reset / setFile / openFolder）。 */
     async function act(sessionId, action, payload) {
       patch({ busy: true });
       try {
         const snapshot = await request(sessionId, { action, ...(payload ?? {}) });
-        if (action === 'toggleGlobal' || action === 'setFile' || action === 'openFolder') {
-          // 这三个动作返回的是概览，且会影响「围栏文件在哪 / 总开关」这类全局信息。
-          patch({ overview: snapshot, busy: false, error: null });
+        if (action === 'openFolder') {
+          // 结果必须让用户看见：成功也要有一行提示，否则「没反应」无法与「成功」区分。
+          patch({ overview: snapshot, busy: false, error: null, notice: noticeOf(snapshot) });
+          await refreshAll();
+          return snapshot;
+        }
+        if (action === 'toggleGlobal' || action === 'setFile') {
+          // 这两个动作返回的是概览，且会影响「围栏文件在哪 / 总开关」这类全局信息。
+          patch({ overview: snapshot, busy: false, error: null, notice: null });
           await refreshAll();
           return snapshot;
         }
@@ -162,7 +191,7 @@ window.__ModuleLoader__.load({
         }
         return snapshot;
       } catch (error) {
-        patch({ busy: false, error: error?.message ?? String(error) });
+        patch({ busy: false, error: error?.message ?? String(error), notice: null });
         return null;
       }
     }
@@ -495,6 +524,9 @@ window.__ModuleLoader__.load({
             },
           }),
           snapshot.error !== null ? react.createElement('div', { className: 'dialog-fence-error' }, snapshot.error) : null,
+          snapshot.notice !== null && snapshot.notice !== undefined
+            ? react.createElement('div', { className: 'dialog-fence-meta', 'data-notice': 'open-folder' }, snapshot.notice)
+            : null,
           entry !== undefined
             ? react.createElement(
                 'div',
@@ -551,6 +583,7 @@ window.__ModuleLoader__.load({
       const rules = common?.rules ?? [];
       const sessionCount = (overview?.sessions ?? []).length;
       const fenceFile = common?.file ?? overview?.file ?? '';
+      const notice = snapshot.notice;
 
       const add = () => {
         const text = draft.trim();
@@ -626,6 +659,10 @@ window.__ModuleLoader__.load({
             : null,
           moving
             ? react.createElement('div', { className: 'dialog-fence-meta' }, '迁移会把现有规则一起写到新文件，并在原目录留一个 location.json 指针。之后删掉指针就回到默认位置。')
+            : null,
+          // 「打开文件夹」没有可观察的副作用，必须自己把结果说出来，否则成功与失败长得一样。
+          typeof notice === 'string' && notice.length > 0
+            ? react.createElement('div', { className: 'dialog-fence-meta', 'data-notice': 'open-folder' }, notice)
             : null,
         ),
 

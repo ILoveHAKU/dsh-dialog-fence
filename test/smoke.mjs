@@ -219,6 +219,11 @@ check('相对路径被拒', relativeResult.kind === 'error', relativeResult.text
 const openResult = run('/fence open');
 check('open 返回目标路径', openResult.kind === 'success' && openResult.text.includes('fence.json'), openResult.text);
 check('测试环境禁止真的打开文件夹', process.env.DIALOG_FENCE_NO_OPEN === '1', '缺少 DIALOG_FENCE_NO_OPEN');
+// 0.8.0：测试模式必须写在回复里，否则用户从命令输出看不出「到底开没开」。
+check('open 明确说明未真的弹窗', openResult.kind === 'success' && openResult.text.includes('测试模式'), openResult.text);
+// openFolder 的返回值必须是可判别的对象，而不是无条件 ok:true。
+const openProbe = run('/fence all open');
+check('all open 同样说明测试模式', openProbe.kind === 'success' && openProbe.text.includes('测试模式'), openProbe.text);
 
 // ---------------------------------------------------------------------------
 // 用例 2：从 0.3~0.6 的多 txt 目录迁移

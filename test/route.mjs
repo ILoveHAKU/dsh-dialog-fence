@@ -240,6 +240,9 @@ const fenceFile = path.join(home, 'fence.json');
   check('openFolder 200', opened.status === 200, JSON.stringify(opened.body));
   check('测试环境不真的弹窗', opened.body.opened === false, JSON.stringify(opened.body.opened));
   check('openFolder 返回目录', typeof opened.body.dir === 'string' && opened.body.dir.length > 0, JSON.stringify(opened.body.dir));
+  // 0.8.0：openReason / openWarning 必须出现在回包里，客户端才有东西可显示。
+  check('openFolder 带上原因', opened.body.openReason === 'test-mode', JSON.stringify(opened.body.openReason));
+  check('openFolder 带上异步失败位', Object.hasOwn(opened.body, 'openWarning'), 'openWarning 字段缺失');
 }
 
 // ---------------------------------------------------------------------------

@@ -552,24 +552,53 @@ function overviewOf() {
   };
 }
 
+/**
+ * 上一次 spawn 的**异步**失败。
+ * spawn 的失败是子进程对象上的 'error' 事件，晚于函数返回，同步的 try/catch 永远抓不到；
+ * 这里把它记下来，下一次调用时报告，避免「明明启动失败却永远显示成功」。
+ */
+let lastOpenFailure = null;
+
 /** 打开围栏文件所在文件夹（桌面形态可用；测试用 DIALOG_FENCE_NO_OPEN 关掉）。 */
 function openFolder(target) {
   const dir = path.dirname(target);
   if (process.env.DIALOG_FENCE_NO_OPEN === '1') return { ok: true, opened: false, dir, reason: 'test-mode' };
+  const previousFailure = lastOpenFailure;
+  lastOpenFailure = null;
   try {
+    // windowsHide: false —— 显式声明不要隐藏子进程窗口。
+    // 实测（%TEMP% 隔离探针）：windowsHide:true 时 explorer 窗口会被创建但 IsWindowVisible=false
+    // （style 0x4CF0000，缺 WS_VISIBLE），false 与不填则可见（style 0x14CF0000）。
+    const options = { detached: true, stdio: 'ignore', windowsHide: false };
+    let child = null;
     if (process.platform === 'win32') {
       // /select 会打开资源管理器并选中该文件；文件不存在时退化为打开目录。
       const args = fs.existsSync(target) ? ['/select,', target] : [dir];
-      childProcess.spawn('explorer.exe', args, { detached: true, stdio: 'ignore' }).unref();
+      child = childProcess.spawn('explorer.exe', args, options);
     } else if (process.platform === 'darwin') {
-      childProcess.spawn('open', ['-R', target], { detached: true, stdio: 'ignore' }).unref();
+      child = childProcess.spawn('open', ['-R', target], options);
     } else {
-      childProcess.spawn('xdg-open', [dir], { detached: true, stdio: 'ignore' }).unref();
+      child = childProcess.spawn('xdg-open', [dir], options);
     }
+    // 挂上 'error' 监听：既把失败记录下来，也避免 ENOENT 变成未捕获的 'error' 事件把宿主打崩。
+    if (child !== null && typeof child.on === 'function') {
+      child.on('error', (error) => {
+        lastOpenFailure = `无法打开文件夹: ${error?.message ?? error}`;
+      });
+    }
+    if (child !== null && typeof child.unref === 'function') child.unref();
+    if (previousFailure !== null) return { ok: true, opened: true, dir, warning: previousFailure };
     return { ok: true, opened: true, dir };
   } catch (error) {
     return { ok: false, error: `无法打开文件夹: ${error?.message ?? error}`, dir };
   }
+}
+
+/** openFolder 结果的附加说明（给 /fence open 的文本输出用）。 */
+function openNotes(opened) {
+  if (opened.reason === 'test-mode') return '\n\n（测试模式：DIALOG_FENCE_NO_OPEN=1，未真的打开窗口）';
+  if (typeof opened.warning === 'string' && opened.warning.length > 0) return `\n\n注意：上一次打开失败 —— ${opened.warning}`;
+  return '';
 }
 
 /** 把围栏文件搬到新位置，并把 location.json 指针指过去。 */
@@ -622,7 +651,13 @@ function applyAction(sessionId, action, payload) {
   if (action === 'openFolder') {
     const opened = openFolder(fenceFile());
     if (opened.ok === false) return { ok: false, error: opened.error };
-    return { ...overviewOf(), opened: opened.opened === true, openReason: opened.reason ?? null };
+    return {
+      ...overviewOf(),
+      opened: opened.opened === true,
+      openReason: opened.reason ?? null,
+      // 上一轮 spawn 的异步失败：由这里带到前端，否则失败对用户永远不可见。
+      openWarning: opened.warning ?? null,
+    };
   }
 
   if (scope === 'session' && sessionId === '') return { ok: false, error: '缺少会话 id' };
@@ -812,7 +847,8 @@ function handleFenceCommon(argument) {
   if (verb === 'open') {
     const opened = openFolder(fenceFile());
     if (opened.ok === false) return fail(opened.error);
-    return succeed(`已打开围栏文件夹:\n${opened.dir}`);
+    const note = openNotes(opened);
+    return succeed(`已打开围栏文件夹:\n${opened.dir}${note}`);
   }
 
   const fence = loadFence();
@@ -889,7 +925,8 @@ function handleFence(invocation) {
   if (verb === 'open') {
     const opened = openFolder(fenceFile());
     if (opened.ok === false) return fail(opened.error);
-    return succeed(`已打开围栏文件夹:\n${opened.dir}\n\n围栏文件: ${fenceFile()}`);
+    const note = openNotes(opened);
+    return succeed(`已打开围栏文件夹:\n${opened.dir}\n\n围栏文件: ${fenceFile()}${note}`);
   }
 
   if (sessionId === '') return fail('/fence: 无法确定当前会话 id');
