@@ -132,8 +132,9 @@ exportsObject.apply(ctx);
 assert.equal(styles.length, 1, 'injects exactly one <style> tag');
 assert.match(styles[0].textContent, /dialog-fence-trigger/, 'css covers the trigger button');
 assert.match(styles[0].textContent, /\.dialog-fence-page/, 'css covers the plugins page');
-assert.match(styles[0].textContent, /\.dialog-fence-input/, 'css covers the inline rule editor');
-assert.doesNotMatch(styles[0].textContent, /textarea/i, 'no textarea styling remains');
+assert.match(styles[0].textContent, /\.dialog-fence-input/, 'css covers the fence-file path input');
+assert.match(styles[0].textContent, /\.dialog-fence-textarea/, 'css covers the multiline rule editor');
+assert.match(styles[0].textContent, /resize:vertical/, 'the rule editor is resizable');
 assert.ok(styles[0].dataset.pluginCss, 'style tag is tagged for de-duplication');
 
 assert.deepEqual(effects, [
@@ -225,7 +226,7 @@ const sectionText = collectText(sectionTree).join(' ');
 const sectionClasses = collectClass(sectionTree);
 assert.match(sectionText, /围栏规则（对每个对话生效）/, 'the rule editor is the main view of the settings page');
 assert.match(sectionText, /读取中/, 'first frame shows the loading placeholder for the common layer');
-assert.ok(sectionClasses.has('dialog-fence-input'), 'the page offers an inline rule input');
+assert.ok(sectionClasses.has('dialog-fence-textarea'), 'the page offers a multiline box for a new rule');
 assert.equal(sectionClasses.has('dialog-fence-table'), false, 'the session table is gone');
 assert.equal(sectionClasses.has('dialog-fence-tr'), false, 'no per-session rows on the settings page');
 
@@ -270,9 +271,37 @@ assert.match(source, /'已打开围栏文件夹'/, 'success is stated explicitly
 assert.match(source, /'测试模式：没有真的打开窗口'/, 'test-mode is reported, not silently ignored');
 assert.match(source, /上一次启动资源管理器失败/, 'a deferred spawn failure is reported');
 
-// ---- 5) 面板里不再有 textarea，只有逐行的 input ------------------------------
-assert.doesNotMatch(source, /createElement\(\s*['"]textarea['"]/i, 'client bundle no longer creates a textarea');
-assert.match(source, /dialog-fence-input/, 'inline input class is used for per-rule editing');
+// ---- 5) 规则正文用多行输入框（0.9.0，用户 CR-16：单行 input 不好调整内容）----
+// 每条规则的编辑器、以及三处「新建规则」框都必须是 textarea：
+// 规则是成句成段的中文，单行 input 看不全也换不了行。
+assert.match(source, /createElement\(\s*'textarea'/, 'rule editors use a multiline textarea');
+assert.match(source, /dialog-fence-textarea/, 'the textarea carries its own class');
+assert.equal(
+  (source.match(/createElement\('textarea'/g) ?? []).length,
+  4,
+  'four textareas: 1 rule editor + 3 new-rule boxes (panel common, panel session, settings page)',
+);
+// 唯一还该用单行 input 的地方是「围栏文件绝对路径」——路径含换行没有意义。
+assert.equal(
+  (source.match(/className: 'dialog-fence-input'/g) ?? []).length,
+  1,
+  'the only remaining single-line input is the fence-file path box',
+);
+assert.equal(
+  (source.match(/createElement\('textarea'/g) ?? []).length,
+  4,
+  'four textareas: 1 rule editor + 3 new-rule boxes (panel common, panel session, settings page)',
+);
+// 多行框里 Enter 必须换行，提交改走 Ctrl/Cmd+Enter。
+assert.match(
+  source,
+  /event\.key === 'Enter' && \(event\.ctrlKey === true \|\| event\.metaKey === true\)/,
+  'Enter inserts a newline; Ctrl/Cmd+Enter commits',
+);
+assert.doesNotMatch(source, /if \(event\.key === 'Enter'\) commit\(\);/, 'bare Enter no longer commits the rule editor');
+// 仍然没有「打开就变成长文本框」的老毛病：查看态是纯文本，只有点「改」才出编辑器。
+assert.match(source, /className: 'dialog-fence-text' \}, rule\.text/, 'idle rows stay plain text');
+assert.match(source, /if \(!editing\)/, 'the editor only appears while editing');
 
 // ---- 6) 复算 dsh-client-modules 的解析链（保证重启后真能被扫到）-------------
 // 参考 dsh-client-modules/lib/index.js：

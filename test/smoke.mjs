@@ -303,6 +303,26 @@ fs.writeFileSync(editFile, `${JSON.stringify({ version: 3, enabled: true, rules:
 const editedRender = editCtx.contexts[0].text({ scope: { id: 'session-any' } });
 check('手改 JSON 立刻生效', editedRender.includes('手改的规则'), editedRender);
 
+// 0.9.0：规则正文可以多行（界面上用 textarea 编辑）。
+// 多行文本必须在 JSON 往返后原样保留，只把 \r\n 归一成 \n，不能把中间那层换行吃掉。
+const multiLine = '第一行要求。\n第二行要求。\n第三行要求。';
+fs.writeFileSync(
+  editFile,
+  `${JSON.stringify({ version: 3, enabled: true, rules: [multiLine], sessions: {} }, null, 2)}\n`,
+  'utf8',
+);
+const multiRender = editCtx.contexts[0].text({ scope: { id: 'session-any' } });
+check('多行规则逐行保留', multiRender.includes(multiLine), multiRender);
+check('多行规则仍然带序号', multiRender.includes('1. 第一行要求。'), multiRender);
+// CRLF 要在写回时归一成 LF（normalizeText 的约定），否则同一规则会因换行符不同被判重复。
+fs.writeFileSync(
+  editFile,
+  `${JSON.stringify({ version: 3, enabled: true, rules: ['甲\r\n乙'], sessions: {} }, null, 2)}\n`,
+  'utf8',
+);
+const crlfRender = editCtx.contexts[0].text({ scope: { id: 'session-any' } });
+check('CRLF 归一成 LF', crlfRender.includes('1. 甲\n乙'), JSON.stringify(crlfRender));
+
 // 坏 JSON 不应炸掉整轮对话
 fs.writeFileSync(editFile, '{ this is not json', 'utf8');
 let brokenThrew = false;

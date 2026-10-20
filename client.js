@@ -244,6 +244,14 @@ window.__ModuleLoader__.load({
       '.dialog-fence-input{flex:1;min-width:0;height:28px;padding:0 8px;border-radius:7px;box-sizing:border-box;',
       'border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:inherit;',
       'font:inherit;font-size:13px}',
+      // 规则正文用多行输入框：单行 input 改长规则时看不到全貌，也不好换行。
+      '.dialog-fence-textarea{flex:1;min-width:0;min-height:66px;padding:6px 8px;border-radius:7px;',
+      'box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);',
+      'background:var(--dsw-alias-bg-layer-1);color:inherit;font:inherit;font-size:13px;',
+      'line-height:1.5;resize:vertical;white-space:pre-wrap;word-break:break-word}',
+      '.dialog-fence-row[data-editing="true"]{align-items:flex-start}',
+      '.dialog-fence-editor{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}',
+      '.dialog-fence-hint{color:var(--dsw-alias-label-tertiary);font-size:11px}',
       '.dialog-fence-meta{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}',
       '.dialog-fence-error{color:var(--dsw-alias-state-danger-primary,#d33);font-size:12px}',
       '.dialog-fence-empty{color:var(--dsw-alias-label-tertiary);padding:6px 2px}',
@@ -318,7 +326,8 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------------
-    // 2) 浮层面板：每条规则一行，单独编辑（不用 textarea）
+    // 2) 浮层面板：每条规则一行，查看态是纯文本，点「改」才出多行编辑框
+    //    （0.9.0 起编辑器用 textarea：规则是成句成段的中文，单行 input 看不全也换不了行）
     // ---------------------------------------------------------------------
 
     function RuleRow(props) {
@@ -359,19 +368,30 @@ window.__ModuleLoader__.load({
         'div',
         { className: 'dialog-fence-row', 'data-editing': 'true' },
         react.createElement('span', { className: 'dialog-fence-index' }, String(index + 1)),
-        react.createElement('input', {
-          className: 'dialog-fence-input',
-          value: draft,
-          autoFocus: true,
-          onChange: (event) => setDraft(event.target.value),
-          onKeyDown: (event) => {
-            if (event.key === 'Enter') commit();
-            if (event.key === 'Escape') {
-              setDraft(rule.text);
-              setEditing(false);
-            }
-          },
-        }),
+        react.createElement(
+          'div',
+          { className: 'dialog-fence-editor' },
+          react.createElement('textarea', {
+            className: 'dialog-fence-textarea',
+            value: draft,
+            rows: 3,
+            autoFocus: true,
+            spellCheck: false,
+            onChange: (event) => setDraft(event.target.value),
+            onKeyDown: (event) => {
+              // textarea 里 Enter 必须是换行；保存走 Ctrl/Cmd+Enter，取消走 Escape。
+              if (event.key === 'Enter' && (event.ctrlKey === true || event.metaKey === true)) {
+                event.preventDefault();
+                commit();
+              }
+              if (event.key === 'Escape') {
+                setDraft(rule.text);
+                setEditing(false);
+              }
+            },
+          }),
+          react.createElement('div', { className: 'dialog-fence-hint' }, 'Ctrl+Enter 保存 · Esc 取消 · 可换行'),
+        ),
         react.createElement(
           'button',
           { type: 'button', className: 'dialog-fence-btn', 'data-primary': 'true', onClick: commit },
@@ -474,13 +494,19 @@ window.__ModuleLoader__.load({
                     onRemove: (target) => act(COMMON_SCOPE, 'remove', { index: target }),
                   }),
                 ),
-          react.createElement('input', {
-            className: 'dialog-fence-input',
-            placeholder: '新建一条通用规则，回车添加（写进同一个围栏文件）',
+          react.createElement('textarea', {
+            className: 'dialog-fence-textarea',
+            rows: 2,
+            spellCheck: false,
+            placeholder: '新建一条通用规则（写进同一个围栏文件）。Ctrl+Enter 添加，可换行。',
             value: draftCommon,
             onChange: (event) => setDraftCommon(event.target.value),
             onKeyDown: (event) => {
-              if (event.key === 'Enter') addCommon();
+              // 多行输入框里 Enter 只能换行，提交用 Ctrl/Cmd+Enter。
+              if (event.key === 'Enter' && (event.ctrlKey === true || event.metaKey === true)) {
+                event.preventDefault();
+                addCommon();
+              }
             },
           }),
           react.createElement(
@@ -514,13 +540,18 @@ window.__ModuleLoader__.load({
                     onRemove: (target) => act(sessionId, 'remove', { index: target }),
                   }),
                 ),
-          react.createElement('input', {
-            className: 'dialog-fence-input',
-            placeholder: '新增一条只作用于本对话的规则，回车添加',
+          react.createElement('textarea', {
+            className: 'dialog-fence-textarea',
+            rows: 2,
+            spellCheck: false,
+            placeholder: '新增一条只作用于本对话的规则。Ctrl+Enter 添加，可换行。',
             value: draft,
             onChange: (event) => setDraft(event.target.value),
             onKeyDown: (event) => {
-              if (event.key === 'Enter') add();
+              if (event.key === 'Enter' && (event.ctrlKey === true || event.metaKey === true)) {
+                event.preventDefault();
+                add();
+              }
             },
           }),
           snapshot.error !== null ? react.createElement('div', { className: 'dialog-fence-error' }, snapshot.error) : null,
@@ -685,13 +716,18 @@ window.__ModuleLoader__.load({
                     onRemove: (target) => act(COMMON_SCOPE, 'remove', { index: target }),
                   }),
                 ),
-          react.createElement('input', {
-            className: 'dialog-fence-input',
-            placeholder: '新建一条规则，回车添加（所有规则存在同一个围栏文件里）',
+          react.createElement('textarea', {
+            className: 'dialog-fence-textarea',
+            rows: 3,
+            spellCheck: false,
+            placeholder: '新建一条规则（所有规则存在同一个围栏文件里）。Ctrl+Enter 添加，可换行。',
             value: draft,
             onChange: (event) => setDraft(event.target.value),
             onKeyDown: (event) => {
-              if (event.key === 'Enter') add();
+              if (event.key === 'Enter' && (event.ctrlKey === true || event.metaKey === true)) {
+                event.preventDefault();
+                add();
+              }
             },
           }),
           snapshot.error !== null ? react.createElement('div', { className: 'dialog-fence-error' }, snapshot.error) : null,
