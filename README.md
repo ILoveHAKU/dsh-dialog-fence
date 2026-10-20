@@ -1,6 +1,7 @@
 # dsh-dialog-fence
 
 > 给 DSH（DeepSeek Harness）的每一次对话设定**边界与围栏**：一套按会话隔离、随时增删、下一轮即生效的行为约束规则。
+> 每条规则就是**一个独立的 `.txt` 文件**——用任何编辑器随手改，下一轮生效。
 > 不破坏前缀缓存 · 不膨胀上下文 · 不影响其它对话 · 与 billion-context 压缩共存。
 
 适用形态：**`dsh` CLI（web / headless / acp 等 profile）** 与 **DSH Desktop**。
@@ -9,18 +10,19 @@
 
 ## 它解决什么问题
 
-大模型每轮都会忘掉"这次对话的规矩"。常见的补丁方式都有代价：
+大模型每轮都会忘掉「这次对话的规矩」。常见的补丁方式都有代价：
 
 | 做法 | 代价 |
 |---|---|
 | 把规矩写进系统提示词 | 内容一变，系统提示词就变 → 前缀缓存整体失效（本机 workbuddy / opencode-go 路由未声明 `systemPromptUpdate: 'in-history'`，会触发 head 重写） |
 | 每轮追加一条 user 消息 | 纯追加安全，但永不回收，几十轮后吃掉几千 token |
-| 用压缩插件的"规则"功能 | billion-context 0.1.202 的 `acp_rule` 只存不注（源码里 `RULES_USAGE_PROMPT` 有定义零引用），plugin 模式 `compress.rules` 亦不生效 |
+| 用压缩插件的「规则」功能 | billion-context 0.1.202 的 `acp_rule` 只存不注（源码里 `RULES_USAGE_PROMPT` 有定义零引用），plugin 模式 `compress.rules` 亦不生效 |
 
 dialog-fence 的做法：把规则注入到 **运行时上下文快照（runtime context）** 这一段里。
 
 ```
-rules.json（按 sessionId 分桶）
+rules/sessions/<会话 id>/01-xxx.txt   ← 每条规则一个文件
+rules/state.json                      ← 只存开关（全局 + 各会话），不存正文
    └─ systemPrompt.context({ name:'dialog-fence:rules', order:118 })
         └─ 只在 enabled 的会话返回文本，其它会话返回空串
              └─ agent-loop: joinContextSections() → "Current runtime context. ..."
@@ -31,11 +33,23 @@ rules.json（按 sessionId 分桶）
 
 三件事因此同时成立：
 
-1. **零缓存破坏**：从不碰系统提示词；历史里只有"追加"，没有任何前缀被重写。
+1. **零缓存破坏**：从不碰系统提示词；历史里只有「追加」，没有任何前缀被重写。
 2. **零无谓消耗**：文本不变时快照不落盘，同一条规则不会每轮重发。
 3. **压缩后仍存活**：快照头是 `Current runtime context`，被 billion-context 的 `dshDurableToolPath` 归为 `durable/runtime-context`，自动进 `protectedLatestTools`（只保护最新一份，旧快照可被压缩），围栏常驻且不膨胀。
 
-隔离性：`rules.json` 以 `sessionId` 为键，未登记的会话渲染空字符串，而 `renderContextSections()` 会 `.filter(s => s.text.length > 0)` —— **空串 = 零 token、零注入、零副作用**。
+隔离性：规则目录以 `sessionId` 为键，未登记的会话渲染空字符串，而 `renderContextSections()` 会 `.filter(s => s.text.length > 0)` —— **空串 = 零 token、零注入、零副作用**。
+
+---
+
+## 三处界面
+
+| 界面 | 位置 | 能力 |
+|---|---|---|
+| 会话按钮 | 会话右上角工具区「围栏」，带规则条数徽标 | 打开本会话规则浮层 |
+| 规则浮层 | 右下角面板 | 逐条查看 / **单行内联编辑**（无 textarea）/ 删除 / 新增 / 启停 / 清空 |
+| **插件页** | 设置 → **内置插件** → 「对话围栏」一页 | **全局总开关** + 所有已配置会话的清单（启用状态、规则条数） |
+
+三处界面写的是同一份文件：面板改完 → 文件落盘 → 下一轮装配时重新读取 → 生效。没有任何状态分叉。
 
 ---
 
@@ -58,7 +72,7 @@ node scripts/install.mjs install --profile headless --home "C:\Users\你\AppData
 # 先看会写什么，不落盘
 node scripts/install.mjs install --dry-run
 
-# 卸载（只删插入行，rules.json 保留）
+# 卸载（只删插入行，rules/ 里的规则文件保留）
 node scripts/install.mjs uninstall
 ```
 
@@ -74,6 +88,11 @@ node scripts/install.mjs uninstall
 
 > 若本机没有 `node`（DSH Desktop 自带的是 Electron），用：
 > `$env:ELECTRON_RUN_AS_NODE="1"; & "D:\DSH Desktop\DSH Desktop.exe" scripts\install.mjs status`
+
+> 用这种方式安装时，Desktop 日志里可能出现一条
+> `[desktop] profile inconsistency: the patch layer inserts file:///…, which is not installed`。
+> 这是 Desktop 的一致性提示（它把 `file:///` 插入行的路径当成包名去 `node_modules` 找），
+> **不影响加载**——同一份日志的下一行就是 `[dialog-fence] ready`。想去掉这条提示请用方式 B。
 
 ### 方式 B：作为 profile bundle 安装（`dsh plugin` / pnpm 生态）
 
@@ -101,7 +120,7 @@ dsh: warning: <name> declares no dsh.bundle — installed as a plain dependency,
 ### 验证安装
 
 ```bash
-# 1) 无宿主测试（语法 + 行为，不会碰线上 rules.json）
+# 1) 无宿主测试（语法 + 行为，不会碰线上规则目录）
 node test/smoke.mjs && node test/route.mjs && node test/client.mjs && node test/render.mjs
 
 # 2) 重启后在任意会话里
@@ -127,14 +146,21 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 
 ### 可视化面板（web / DSH Desktop）
 
-重启后，会话右上角的工具区会出现一个 **「围栏」** 按钮，按钮上的数字是当前会话的规则条数（蓝点 = 已启用）。点开即面板：
+重启后：
 
-- 逐条查看 / 编辑 / 删除规则
-- 启用 / 停用本会话围栏
-- 底部实时显示 `注入 N 字符 ≈ M token`
-- 所有改动**下一轮生效**，无需重启
+- **会话右上角**出现「围栏」按钮，数字是当前会话的规则条数（高亮 = 已启用）。点开即浮层。
+- 每条规则占一行：左侧序号、中间正文（下面是它对应的文件名）、右侧「改」「删」。
+  点「改」把该行就地变成**单行输入框**，`Enter` 保存 / `Esc` 取消 —— **没有任何 textarea**。
+- 底部有单行输入框可直接新建一条，另有「清空」，右下角实时显示 `注入 N 字符 ≈ M token`。
+- 所有改动**下一轮生效**，无需重启。
 
-面板只在 Web 形态出现（CLI / TUI / headless 没有 `connection` 服务，插件会自动跳过路由注册，`/fence` 命令照常可用）。
+**插件页**：设置 → 内置插件 → 顶部多出「对话围栏」一页，里面有：
+
+- **总开关**（关掉后所有会话立即零注入，规则文件原封不动）
+- 会话清单表：会话 id / 启用状态 / 规则条数
+- 数据目录路径（方便直接去改文件）
+
+面板与插件页都只在 Web 形态出现（CLI / TUI / headless 没有 `connection` 服务，插件会自动跳过路由注册，`/fence` 命令照常可用）。
 
 ### 斜杠命令（所有形态）
 
@@ -142,35 +168,37 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 |---|---|
 | `/fence` | 查看状态（启用与否、条数、实际注入文本、token 估算） |
 | `/fence on` / `/fence off` | 启用 / 停用本会话围栏 |
-| `/fence add <规则文本>` | 追加一条规则（自动启用；重复文本不会重复添加） |
-| `/fence rm <序号>` | 删除第 N 条 |
-| `/fence clear` | 清空本会话规则（保留启用状态） |
+| `/fence add <规则文本>` | 追加一条规则（= 新建一个 txt；自动启用；重复文本不会重复添加） |
+| `/fence rm <序号>` | 删除第 N 条（= 删除对应 txt） |
+| `/fence clear` | 清空本会话规则文件（保留启用状态） |
 | `/fence reset` | 彻底删除本会话记录（等于从未配置过） |
+| `/fence dir` | 打印本会话规则目录与全局 state.json 路径 |
 | `/fence help` | 帮助 |
 
-### 直接编辑状态文件
+### 直接编辑规则文件（推荐给「随时配置和维护」）
 
-`rules.json`（默认在插件目录下，可用环境变量 `DIALOG_FENCE_RULES` 指到别处）：
+默认数据目录 `<插件目录>/rules`（可用环境变量 `DIALOG_FENCE_DIR` 指到别处）：
 
-```json
-{
-  "version": 1,
-  "sessions": {
-    "session-<uuid>": {
-      "enabled": true,
-      "rules": [
-        "不要修改本仓库以外的文件",
-        "结论不确定时必须标注出来"
-      ]
-    }
-  }
-}
 ```
+rules/
+├── state.json                          ← 只存开关，不存正文
+└── sessions/
+    └── session-<uuid>/
+        ├── 01-no-outside-edits.txt     ← 文件名前缀决定注入顺序
+        └── 02-flag-uncertainty.txt
+```
+
+规则就是「目录里有几个 txt，就有几条规则」：
+
+- **往里丢一个 `.txt`** → 该会话自动启用并生效（即使 `state.json` 里没有这个会话）。
+- **改文件内容** → 下一轮注入的文本跟着变。
+- **删文件** → 规则消失。
+- 空白文件不算规则（跳过）。
 
 要点：
 
-- 键是会话 id（`/fence status` 会打印当前会话 id）。
-- **单条 ≤ 400 字符；每会话最多 40 条；渲染上限 2400 字符**（超出会截断并注明 `fence truncated: N/M rules shown`）。
+- 键是会话 id（`/fence status` 或 `/fence dir` 会打印当前会话 id）。
+- **单条 ≤ 2000 字符；每会话最多 40 条；渲染上限 2400 字符**（超出会截断并注明 `fence truncated: N/M rules shown`）。
 - 规则里**不要写 `{{ }}`**：宿主的 `interpolate()` 遇到未注册变量会抛错。插件已用 `try/catch` 兜底降级为空，但内容会静默失效。
 - 文件写入请用 UTF-8。插件对 UTF-8 BOM 与 UTF-16LE 都做了兼容（历史事故：PowerShell 写坏过一次），但别依赖它。
 
@@ -184,7 +212,7 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 | 想要全历史硬保护 | 在 `~/.config/billion-context/billion-context.json` 写 `{"compress":{"protectedTools":["durable/*"]}}`，成为 HARD exclusion（永不折叠） |
 | 想改回自动模式 | 从 `protectedTools` / `protectedLatestTools` 里删掉 `durable/*`，billion-context 会重新自动追加 `durable/*` 到 `protectedLatestTools` |
 
-推论：**不要发增量 delta，要发累积完整快照**。`protectedLatestTools` 的语义是"同一虚拟路径只保最新一条"，发 delta 会让规则在半途丢失。
+推论：**不要发增量 delta，要发累积完整快照**。`protectedLatestTools` 的语义是「同一虚拟路径只保最新一条」，发 delta 会让规则在半途丢失。
 
 ---
 
@@ -193,10 +221,11 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 ```
 dialog-fence/
 ├── index.js            宿主半边：运行时上下文段 + /fence 命令 + HTTP 路由（零 import）
-├── client.js           浏览器半边：会话头部按钮 + 浮层面板（懒 CJS 工厂，只 require react）
-├── package.json        dsh.bundle.patch / dsh.client 声明
+├── client.js           浏览器半边：会话按钮 + 浮层面板 + 插件页（懒 CJS 工厂，只 require react）
+├── icon.svg            插件页图标
+├── package.json        dsh.bundle.patch / dsh.client / icon 声明
 ├── cordis.patch.yml    bundle 安装层（方式 B 用）
-├── rules.json          规则状态（按 sessionId 分桶，运行时生成）
+├── rules/              规则数据（每条规则一个 txt，运行时生成，已在 .gitignore 中）
 ├── scripts/install.mjs 一键安装器（方式 A 用，同时支持 dsh 与 DSH Desktop）
 ├── test/               smoke（宿主逻辑）/ route（HTTP API）/ client（bundle 形态）/ render（真 React 首帧）
 └── docs/               设计与实施方案、运维手册与变更记录
@@ -210,9 +239,10 @@ dialog-fence/
 ## 已知限制
 
 - **宿主半边改动必须重启 DSH**，`dsh-hmr` 不重载本插件（已实测）。
-- 面板需要 Web 形态；CLI / TUI / headless 只有 `/fence` 命令。
-- 规则是"软约束"：它进入模型可见上下文并对模型产生强引导，但**不是强制拦截**。要硬拦截工具调用，请用 `PreToolUse` 钩子（本机已有 `harness/fence/guard.mjs` 做这类事）。
+- 面板与插件页需要 Web 形态；CLI / TUI / headless 只有 `/fence` 命令。
+- 规则是「软约束」：它进入模型可见上下文并对模型产生强引导，但**不是强制拦截**。要硬拦截工具调用，请用 `PreToolUse` 钩子（本机已有 `harness/fence/guard.mjs` 做这类事）。
 - 与 `workbuddy` / `opencode-go` 等未声明 `systemPromptUpdate` 的路由完全兼容——正因为本插件**从不改系统提示词**。
+- 插件页总开关控制的是「是否注入」，不等于卸载插件；要彻底停用请在插件清单里关掉 `dialog-fence` 这个 loader entry。
 
 ## License
 

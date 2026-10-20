@@ -18,7 +18,7 @@
  * 不会被 dsh-hmr 热重载，这一点在 docs/运维手册与变更记录.md 里有实测记录。
  */
 
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, copyFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync, copyFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -224,7 +224,7 @@ function cmdUninstall(args) {
     console.log(`  已备份 ${backup}`);
   }
   if (touched === 0) console.log('没有需要卸载的 profile。');
-  else console.log('\n卸载完成，请重启 DSH。规则文件 rules.json 未删除。');
+  else console.log('\n卸载完成，请重启 DSH。规则目录 rules/ 未删除（每条规则一个 txt）。');
 }
 
 function cmdStatus(args) {
@@ -233,8 +233,28 @@ function cmdStatus(args) {
   console.log(`DSH_HOME : ${home}`);
   console.log(`plugin   : ${PLUGIN_ENTRY}${existsSync(PLUGIN_ENTRY) ? '' : '（缺失！）'}`);
   console.log(`profiles : ${profiles.join(', ') || '（无）'}`);
-  const rulesFile = join(PLUGIN_DIR, 'rules.json');
-  console.log(`rules    : ${rulesFile}${existsSync(rulesFile) ? ` (${statSync(rulesFile).size} B)` : '（尚无，未配置过任何会话）'}`);
+  const rulesDir = join(PLUGIN_DIR, 'rules');
+  const sessionsDir = join(rulesDir, 'sessions');
+  let sessionCount = 0;
+  let ruleCount = 0;
+  try {
+    for (const session of readdirSync(sessionsDir)) {
+      const dir = join(sessionsDir, session);
+      let files = [];
+      try {
+        files = readdirSync(dir).filter((entry) => entry.toLowerCase().endsWith('.txt'));
+      } catch {
+        files = [];
+      }
+      if (files.length === 0) continue;
+      sessionCount += 1;
+      ruleCount += files.length;
+    }
+  } catch {
+    sessionCount = 0;
+    ruleCount = 0;
+  }
+  console.log(`rules    : ${sessionsDir}（${sessionCount} 个会话，共 ${ruleCount} 条规则）`);
   console.log('');
   for (const profile of profiles) {
     const file = patchFileOf(home, profile);

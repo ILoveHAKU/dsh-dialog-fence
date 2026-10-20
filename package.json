@@ -1,10 +1,11 @@
 {
   "name": "dsh-dialog-fence",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
-  "description": "Per-session dialogue fence: inject user-set boundary rules into the runtime-context snapshot only for the sessions that enabled it (cache-safe, append-only, compression-durable). Ships a browser panel for `dsh web` / DSH Desktop.",
+  "description": "Per-session dialogue fence: one .txt file per rule, injected into the runtime-context snapshot only for the sessions that enabled it (cache-safe, append-only, compression-durable). Ships a browser panel and a Plugins settings page for `dsh web` / DSH Desktop.",
   "type": "module",
   "main": "index.js",
+  "icon": "./icon.svg",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -14,6 +15,7 @@
     "index.js",
     "client.js",
     "cordis.patch.yml",
+    "icon.svg",
     "scripts",
     "docs",
     "README.md",
@@ -30,7 +32,8 @@
     "client": {
       "inject": [
         "@deepseek-ai/dsh-client-ui-conversation",
-        "@deepseek-ai/dsh-client-ui-layout"
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-settings-plugins"
       ],
       "platform": "web"
     },

@@ -47,12 +47,7 @@ globalThis.fetch = async () => {
 };
 
 const source = readFileSync(CLIENT_FILE, 'utf8');
-new Function('window', 'document', 'module', 'exports', source)(
-  globalThis.window,
-  globalThis.document,
-  { exports: {} },
-  {},
-);
+new Function('window', 'document', 'module', 'exports', source)(globalThis.window, globalThis.document, { exports: {} }, {});
 
 const definition = loaded[0];
 assert.equal(definition.id, 'dsh-dialog-fence');
@@ -74,9 +69,10 @@ clientExports.apply({
     },
   },
 });
-assert.equal(registrations.length, 2);
+assert.equal(registrations.length, 3, 'header + overlay + plugins tab');
 const HeaderAction = registrations[0].component;
 const Panel = registrations[1].component;
+const PluginsTab = registrations[2].component;
 
 // ---- 1) 头部按钮：真 hooks 下渲染 ------------------------------------------
 const headerMarkup = renderToStaticMarkup(React.createElement(HeaderAction, { sessionId: 'session-render-1' }));
@@ -89,5 +85,15 @@ assert.doesNotMatch(headerMarkup, /dialog-fence-badge/, 'no badge when the sessi
 
 // ---- 2) 浮层面板：未打开任何会话时返回 null（不占 DOM）---------------------
 assert.equal(renderToStaticMarkup(React.createElement(Panel)), '', 'overlay renders nothing while closed');
+
+// ---- 3) 插件页：首帧（overview 尚未返回）也要渲染总开关骨架 -------------------
+const tabMarkup = renderToStaticMarkup(React.createElement(PluginsTab));
+console.log(`   plugins tab: ${tabMarkup.slice(0, 160)}…`);
+assert.match(tabMarkup, /class="dialog-fence-page"/, 'plugins tab renders its page container');
+assert.match(tabMarkup, /对话围栏/, 'plugins tab shows the plugin title');
+assert.match(tabMarkup, /总开关/, 'plugins tab exposes the global switch');
+assert.match(tabMarkup, /开启围栏|关闭围栏/, 'global switch is actionable');
+assert.doesNotMatch(tabMarkup, /读取中/, 'the plugins tab does not render a "loading" placeholder');
+assert.doesNotMatch(tabMarkup, /<textarea/, 'no textarea anywhere');
 
 console.log('OK all dialog-fence render assertions passed');

@@ -8,11 +8,14 @@
  *   2. 用一个只认 "react" 的假 require 调 factory；
  *   3. 检查导出的 apply / inject 形态，并用假 ctx 跑一遍 apply。
  *
+ * 0.3.0 起有三处界面：会话头部按钮、浮层面板、插件页（settings.plugins.tab）。
+ *
  * 这一步只保证 bundle 语法正确、产物形状正确、slot 注册参数正确；
  * 真正的视觉与交互需要重启 DSH 后在浏览器里看。
  *
  * 运行：
- *   node test/client.mjs
+ *   $env:ELECTRON_RUN_AS_NODE="1"
+ *   & "D:\DSH Desktop\DSH Desktop.exe" "...\dialog-fence\test\client.mjs"
  */
 
 import assert from 'node:assert/strict';
@@ -22,7 +25,7 @@ import { pathToFileURL } from 'node:url';
 
 const CLIENT_FILE = join(import.meta.dirname, '..', 'client.js');
 
-// ---- 假 React：只提供 client.js 实际用到的三个 API ---------------------------
+// ---- 假 React：只提供 client.js 实际用到的 API -------------------------------
 const react = {
   createElement(type, props, ...children) {
     return { type, props: props ?? {}, children };
@@ -59,10 +62,22 @@ globalThis.document = {
   },
 };
 
+// 渲染期不该联网；动作函数只会在事件里被调用，测试不触发。
+const fetched = [];
+globalThis.fetch = async (url, init) => {
+  fetched.push({ url: String(url), init });
+  return {
+    ok: true,
+    status: 200,
+    async json() {
+      return { ok: true, globalEnabled: true, sessions: [] };
+    },
+  };
+};
+
 // ---- 执行 bundle -----------------------------------------------------------
 const source = readFileSync(CLIENT_FILE, 'utf8');
 const module = { exports: {} };
-// bundle 是 CJS 风格（没有 import/export 语句），用 Function 包一层即可求值。
 new Function('window', 'document', 'module', 'exports', source)(
   globalThis.window,
   globalThis.document,
@@ -88,7 +103,7 @@ assert.deepEqual(requested, ['react'], 'client bundle requires nothing but react
 assert.equal(typeof exportsObject.apply, 'function');
 assert.deepEqual(exportsObject.inject, ['slots']);
 
-// ---- 3) apply() 只注册两个 slot，且参数正确 --------------------------------
+// ---- 3) apply() 注册三处界面，且参数正确 -----------------------------------
 const registrations = [];
 let injections = 0;
 const effects = [];
@@ -114,11 +129,14 @@ exportsObject.apply(ctx);
 
 assert.equal(styles.length, 1, 'injects exactly one <style> tag');
 assert.match(styles[0].textContent, /dialog-fence-trigger/, 'css covers the trigger button');
+assert.match(styles[0].textContent, /\.dialog-fence-page/, 'css covers the plugins page');
+assert.match(styles[0].textContent, /\.dialog-fence-input/, 'css covers the inline rule editor');
+assert.doesNotMatch(styles[0].textContent, /textarea/i, 'no textarea styling remains');
 assert.ok(styles[0].dataset.pluginCss, 'style tag is tagged for de-duplication');
 
-assert.deepEqual(effects, ['dialog-fence: header', 'dialog-fence: overlay']);
-assert.equal(injections, 2, 'both slots go through slots.inject (waits for declaration)');
-assert.equal(registrations.length, 2);
+assert.deepEqual(effects, ['dialog-fence: header', 'dialog-fence: overlay', 'dialog-fence: plugins-tab']);
+assert.equal(injections, 3, 'all slots go through slots.inject (waits for declaration)');
+assert.equal(registrations.length, 3);
 
 const { spec: headerSpec, component: HeaderAction } = registrations[0];
 assert.equal(headerSpec.name, 'conversation.session.header.utilities');
@@ -131,16 +149,33 @@ assert.equal(overlaySpec.name, 'shell.overlay');
 assert.equal(overlaySpec.id, 'dialog-fence-panel');
 assert.equal(typeof Panel, 'function');
 
+const { spec: tabSpec, component: PluginsTab } = registrations[2];
+assert.equal(tabSpec.name, 'settings.plugins.tab', 'appears in the Plugins settings section');
+assert.equal(tabSpec.id, 'dialog-fence', 'own tab id, adds a cell instead of replacing one');
+assert.equal(typeof tabSpec.order, 'number');
+assert.equal(typeof tabSpec.label, 'function', 'label is a thunk so it follows the locale');
+assert.equal(tabSpec.label(), '对话围栏');
+assert.equal(typeof PluginsTab, 'function');
+
 // ---- 4) 组件能在「未读取到数据」与「有数据」两种状态下渲染而不抛 ---------------
-const header_tree = HeaderAction({ sessionId: 'session-x' });
-assert.equal(header_tree.type, 'button');
-assert.equal(header_tree.props['data-on'], 'false');
-assert.equal(header_tree.props.className, 'dialog-fence-trigger');
+const headerTree = HeaderAction({ sessionId: 'session-x' });
+assert.equal(headerTree.type, 'button');
+assert.equal(headerTree.props['data-on'], 'false');
+assert.equal(headerTree.props.className, 'dialog-fence-trigger');
 
 // Panel 在没打开任何会话时返回 null（浮层不占 DOM）
 assert.equal(Panel(), null);
 
-// ---- 5) 复算 dsh-client-modules 的解析链（保证重启后真能被扫到）-------------
+// 插件页第一帧（还没拉到 overview）也要能渲染
+const tabTree = PluginsTab();
+assert.equal(tabTree.type, 'div');
+assert.equal(tabTree.props.className, 'dialog-fence-page');
+
+// ---- 5) 面板里不再有 textarea，只有逐行的 input ------------------------------
+assert.doesNotMatch(source, /createElement\(\s*['"]textarea['"]/i, 'client bundle no longer creates a textarea');
+assert.match(source, /dialog-fence-input/, 'inline input class is used for per-rule editing');
+
+// ---- 6) 复算 dsh-client-modules 的解析链（保证重启后真能被扫到）-------------
 // 参考 dsh-client-modules/lib/index.js：
 //   locatePkgJson(pathLike) → nearestPackage(moduleUrl) → 读 dsh.client
 //   → platform 必须 'web' → exports["./client"] 解出 bundle 路径 → 文件必须存在
@@ -167,6 +202,10 @@ assert.ok(existsSync(join(PLUGIN_DIR, clientRel)), 'exports["./client"] points a
 assert.equal(pkg.name, definition.id, 'package name matches the module-loader id');
 assert.equal(pkg.dsh?.bundle?.patch, './cordis.patch.yml', 'declares a bundle patch for dsh plugin add');
 assert.ok(existsSync(join(PLUGIN_DIR, pkg.dsh.bundle.patch)), 'bundle patch file exists');
+
+// 插件页要显示标题/描述，metaOf 读的是 package.json 的 name/description。
+assert.equal(typeof pkg.description, 'string', 'package.json carries a description for the plugins page');
+assert.ok(pkg.description.length > 0, 'description is non-empty');
 
 console.log('OK all dialog-fence client bundle assertions passed');
 console.log(`   bundle: ${pathToFileURL(CLIENT_FILE).href}`);
