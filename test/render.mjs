@@ -90,14 +90,17 @@ assert.doesNotMatch(headerMarkup, /dialog-fence-badge/, 'no badge when the sessi
 // ---- 2) 浮层面板：未打开任何会话时返回 null（不占 DOM）---------------------
 assert.equal(renderToStaticMarkup(React.createElement(Panel)), '', 'overlay renders nothing while closed');
 
-// ---- 3) 配置页：首帧（overview 尚未返回）也要渲染总开关骨架 -------------------
+// ---- 3) 配置页：首帧（快照尚未返回）也要渲染总开关与规则编辑骨架 ---------------
 const pageMarkup = renderToStaticMarkup(React.createElement(FencePage));
 console.log(`   settings section: ${pageMarkup.slice(0, 160)}…`);
 assert.match(pageMarkup, /class="dialog-fence-page"/, 'settings section renders its page container');
 assert.match(pageMarkup, /对话围栏/, 'settings section shows the plugin title');
 assert.match(pageMarkup, /总开关/, 'settings section exposes the global switch');
 assert.match(pageMarkup, /开启围栏|关闭围栏/, 'global switch is actionable');
-assert.doesNotMatch(pageMarkup, /读取中/, 'the settings section does not render a "loading" placeholder');
+assert.match(pageMarkup, /读取中/, 'first frame shows the placeholder until the common layer arrives');
+assert.match(pageMarkup, /围栏规则（对每个对话生效）/, 'the rule list is the main view, not a session table');
+assert.match(pageMarkup, /dialog-fence-input/, 'has an inline editor for a new rule');
+assert.doesNotMatch(pageMarkup, /session-[0-9a-f]{8}-/, 'no session ids on the settings page');
 assert.doesNotMatch(pageMarkup, /<textarea/, 'no textarea anywhere');
 
 // 插件页标签页复用同一个组件

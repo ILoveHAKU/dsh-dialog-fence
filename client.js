@@ -25,6 +25,8 @@ window.__ModuleLoader__.load({
 
     const NS = 'dsh-dialog-fence';
     const API_ROUTE = '/api/dialog-fence'.slice(1);
+    /** 通用规则层的伪会话 id：API 用 scope=common 区分，客户端复用它做 store 键。 */
+    const COMMON_SCOPE = 'common';
     const SLOT_HEADER = 'conversation.session.header.utilities';
     const SLOT_OVERLAY = 'shell.overlay';
     const SLOT_SETTINGS = 'settings.section';
@@ -43,6 +45,8 @@ window.__ModuleLoader__.load({
     const state = {
       openSessionId: null,
       bySession: {},
+      /** 通用规则层快照（对每个对话生效）—— 设置页的主视图就是它。 */
+      common: null,
       overview: null,
       busy: false,
       error: null,
@@ -73,14 +77,24 @@ window.__ModuleLoader__.load({
     }
 
     async function request(sessionId, body) {
-      const query = sessionId === undefined || sessionId === null ? '' : `?${new URLSearchParams({ sessionId: String(sessionId) }).toString()}`;
+      const query =
+        sessionId === undefined || sessionId === null
+          ? ''
+          : `?${new URLSearchParams(sessionId === COMMON_SCOPE ? { scope: COMMON_SCOPE } : { sessionId: String(sessionId) }).toString()}`;
       const init =
         body === undefined
           ? { method: 'GET', headers: { accept: 'application/json' } }
           : {
               method: 'POST',
               headers: { 'content-type': 'application/json', accept: 'application/json' },
-              body: JSON.stringify({ ...(sessionId === undefined || sessionId === null ? {} : { sessionId: String(sessionId) }), ...body }),
+              body: JSON.stringify({
+                ...(sessionId === undefined || sessionId === null
+                  ? {}
+                  : sessionId === COMMON_SCOPE
+                    ? { scope: COMMON_SCOPE }
+                    : { sessionId: String(sessionId) }),
+                ...body,
+              }),
             };
       const response = await fetch(body === undefined ? `${API_ROUTE}${query}` : API_ROUTE, init);
       const payload = await response.json().catch(() => ({ ok: false, error: `HTTP ${response.status}` }));
@@ -98,7 +112,17 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** 拉一次全局概览（插件页用）。 */
+    /** 拉一次通用规则层快照（设置页主视图）。 */
+    async function refreshCommon() {
+      try {
+        const common = await request(COMMON_SCOPE);
+        patch({ common, error: null });
+      } catch (error) {
+        patch({ error: error?.message ?? String(error) });
+      }
+    }
+
+    /** 拉一次全局概览（设置页用）。 */
     async function refreshOverview() {
       try {
         const overview = await request(undefined);
@@ -114,6 +138,11 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** 设置页刷新：通用层 + 概览。 */
+    async function refreshAll() {
+      await Promise.all([refreshCommon(), refreshOverview()]);
+    }
+
     /** 提交一个动作（toggle / toggleGlobal / add / update / remove / clear / reset）。 */
     async function act(sessionId, action, payload) {
       patch({ busy: true });
@@ -121,6 +150,9 @@ window.__ModuleLoader__.load({
         const snapshot = await request(sessionId, { action, ...(payload ?? {}) });
         if (action === 'toggleGlobal') {
           patch({ overview: snapshot, busy: false, error: null });
+          await refreshAll();
+        } else if (sessionId === COMMON_SCOPE) {
+          patch({ common: snapshot, busy: false, error: null });
           await refreshOverview();
         } else {
           patch({ bySession: { ...state.bySession, [String(sessionId)]: snapshot }, busy: false, error: null });
@@ -392,6 +424,11 @@ window.__ModuleLoader__.load({
             },
           }),
           snapshot.error !== null ? react.createElement('div', { className: 'dialog-fence-error' }, snapshot.error) : null,
+          react.createElement(
+            'div',
+            { className: 'dialog-fence-meta' },
+            `通用规则 ${entry?.common?.rules?.length ?? 0} 条也会叠加到本对话（在「设置 → 对话围栏」里改）`,
+          ),
           entry !== undefined
             ? react.createElement(
                 'div',
@@ -432,19 +469,30 @@ window.__ModuleLoader__.load({
       // 所以除显式 flat 之外，view === 'page' 也用紧凑版式。
       const flat = (props !== undefined && props !== null && props.flat === true) || (props?.view === 'page');
       const snapshot = useExternalStore();
+      const [draft, setDraft] = react.useState('');
+      const common = snapshot.common;
       const overview = snapshot.overview;
       const busy = snapshot.busy === true;
 
       react.useEffect(() => {
-        refreshOverview();
+        refreshAll();
       }, []);
 
-      const globalOn = overview?.globalEnabled !== false;
-      const sessions = overview?.sessions ?? [];
+      const globalOn = overview?.globalEnabled !== false && common?.enabled !== false;
+      const rules = common?.rules ?? [];
+      const sessionCount = (overview?.sessions ?? []).length;
+
+      const add = () => {
+        const text = draft.trim();
+        if (text.length === 0) return;
+        act(COMMON_SCOPE, 'add', { text });
+        setDraft('');
+      };
 
       return react.createElement(
         'div',
         { className: flat ? 'dialog-fence-flat' : 'dialog-fence-page' },
+        // ---- 卡片 1：总开关 ----
         react.createElement(
           'div',
           { className: 'dialog-fence-card' },
@@ -467,38 +515,88 @@ window.__ModuleLoader__.load({
           react.createElement(
             'div',
             { className: 'dialog-fence-meta' },
-            '围栏按会话隔离：只有在「对话」里启用、并且至少有一条规则的会话才会被注入。总开关关掉后，所有会话立即零注入。',
+            '下面这些规则对每一个对话都生效（包括新开的对话）；改完下一轮即生效。总开关关掉后，所有对话立即零注入。',
           ),
-          overview?.dataDir !== undefined
-            ? react.createElement('div', { className: 'dialog-fence-dir' }, `数据目录：${overview.dataDir}`)
+          common?.dir !== undefined
+            ? react.createElement('div', { className: 'dialog-fence-dir' }, `规则目录：${common.dir}`)
             : null,
         ),
+
+        // ---- 卡片 2：通用规则（主视图，可直接编辑正文） ----
         react.createElement(
           'div',
           { className: 'dialog-fence-card' },
-          react.createElement('div', { className: 'dialog-fence-h' }, '会话'),
-          sessions.length === 0
-            ? react.createElement('div', { className: 'dialog-fence-empty' }, '还没有任何会话配置过围栏。')
-            : react.createElement(
-                'div',
-                { className: 'dialog-fence-table' },
-                sessions.map((row) =>
-                  react.createElement(
-                    'div',
-                    { className: 'dialog-fence-tr', key: row.sessionId },
-                    react.createElement('span', { className: 'dialog-fence-c1' }, row.sessionId),
-                    react.createElement('span', { className: 'dialog-fence-pill', 'data-on': row.enabled ? 'true' : 'false' }, row.enabled ? '启用' : '停用'),
-                    react.createElement('span', null, `${row.ruleCount} 条`),
-                  ),
+          react.createElement('div', { className: 'dialog-fence-h' }, '围栏规则（对每个对话生效）'),
+          common === null
+            ? react.createElement('div', { className: 'dialog-fence-empty' }, '读取中…')
+            : rules.length === 0
+              ? react.createElement('div', { className: 'dialog-fence-empty' }, '还没有规则。在下面输入一条并回车。')
+              : rules.map((rule, index) =>
+                  react.createElement(RuleRow, {
+                    key: rule.file,
+                    rule,
+                    index,
+                    busy,
+                    onSave: (file, text) => act(COMMON_SCOPE, 'update', { file, text }),
+                    onRemove: (file) => act(COMMON_SCOPE, 'remove', { file }),
+                  }),
                 ),
-              ),
+          react.createElement('input', {
+            className: 'dialog-fence-input',
+            placeholder: '新建一条规则，回车添加（每条规则单独存成一个 txt 文件）',
+            value: draft,
+            onChange: (event) => setDraft(event.target.value),
+            onKeyDown: (event) => {
+              if (event.key === 'Enter') add();
+            },
+          }),
+          snapshot.error !== null ? react.createElement('div', { className: 'dialog-fence-error' }, snapshot.error) : null,
+          react.createElement(
+            'div',
+            { className: 'dialog-fence-card-head' },
+            react.createElement(
+              'button',
+              { type: 'button', className: 'dialog-fence-btn', 'data-primary': 'true', disabled: busy || draft.trim().length === 0, onClick: add },
+              '添加',
+            ),
+            react.createElement(
+              'button',
+              {
+                type: 'button',
+                className: 'dialog-fence-btn',
+                disabled: busy || rules.length === 0,
+                onClick: () => act(COMMON_SCOPE, 'clear'),
+              },
+              '清空全部',
+            ),
+            react.createElement(
+              'span',
+              { className: 'dialog-fence-meta', style: { flex: 1 } },
+              common === null
+                ? ''
+                : `注入 ${common.chars ?? 0} 字符 ≈ ${common.tokens ?? 0} token · ${rules.length}/${common.limits?.maxRules ?? 40} 条 · 单条上限 ${common.limits?.maxRuleChars ?? 2000} 字符`,
+            ),
+          ),
+        ),
+
+        // ---- 卡片 3：会话专属规则（次要，不再列 sessionId） ----
+        react.createElement(
+          'div',
+          { className: 'dialog-fence-card' },
+          react.createElement('div', { className: 'dialog-fence-h' }, '某个对话的额外规则（可选）'),
           react.createElement(
             'div',
             { className: 'dialog-fence-meta' },
-            '每条规则是 sessions/<会话 id>/NN-<名称>.txt 一个文件，可以直接用任意编辑器增删改，保存后下一轮生效。',
+            '上面是通用规则，对每个对话都生效。如果只想给某一个对话追加规则，点那个对话右上角的「围栏」按钮，在那里维护——那些规则只会叠加到该对话，不影响其它对话。',
           ),
-          snapshot.error !== null ? react.createElement('div', { className: 'dialog-fence-error' }, snapshot.error) : null,
+          react.createElement(
+            'div',
+            { className: 'dialog-fence-meta' },
+            sessionCount === 0 ? '目前没有任何对话设置过专属规则。' : `目前有 ${sessionCount} 个对话设置过专属规则（叠加在通用规则之后）。`,
+          ),
         ),
+
+        // ---- 卡片 4：注入路径说明 ----
         react.createElement(
           'div',
           { className: 'dialog-fence-card' },

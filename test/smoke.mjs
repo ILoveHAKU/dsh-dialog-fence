@@ -204,6 +204,63 @@ run('add 待清理');
 run('reset');
 assert.equal(renderFor(SESSION), '', 'reset removes the session record files');
 
+// ---- 通用规则层（/fence all ...）：对每个对话生效 -----------------------------
+assert.equal(run('all').kind, 'success', '/fence all reports the common status');
+result = run('all dir');
+assert.match(result.text, /common/, 'the common dir is reported');
+
+result = run('all add 通用规则：回答必须标注不确定性');
+assert.equal(result.kind, 'success', `/fence all add works: ${result.text}`);
+const commonDir = join(dataDir, 'common');
+assert.ok(existsSync(commonDir), 'common rules live in <data>/common');
+assert.equal(readdirSync(commonDir).filter((entry) => entry.endsWith('.txt')).length, 1, 'one common rule = one txt');
+
+// 一个从未配置过的会话也要吃通用规则
+const NEVER = `session-never-${Date.now()}`;
+assert.match(renderFor(NEVER), /通用规则：回答必须标注不确定性/, 'common rules apply to a session that was never configured');
+assert.match(renderFor(NEVER), /Dialog fence/, 'the common layer carries the fence header');
+
+// 重复添加幂等
+run('all add 通用规则：回答必须标注不确定性');
+assert.equal(readdirSync(commonDir).filter((entry) => entry.endsWith('.txt')).length, 1, 'duplicate common add is a no-op');
+
+// 通用层 + 会话层叠加，通用在前
+run('on');
+run('add 会话专属：本仓库以外只读');
+const merged = renderFor(SESSION);
+assert.match(merged, /通用规则：回答必须标注不确定性/);
+assert.match(merged, /会话专属：本仓库以外只读/);
+assert.ok(
+  merged.indexOf('通用规则：回答必须标注不确定性') < merged.indexOf('会话专属：本仓库以外只读'),
+  'common rules are numbered before the session rules',
+);
+
+// 直接改通用 txt 文件也即时生效
+const commonFiles = readdirSync(commonDir).filter((entry) => entry.endsWith('.txt'));
+writeFileSync(join(commonDir, commonFiles[0]), '通用规则改过了\n', 'utf8');
+assert.match(renderFor(NEVER), /通用规则改过了/, 'editing a common txt takes effect immediately');
+
+// 删除通用规则
+result = run('all rm 1');
+assert.equal(result.kind, 'success', `/fence all rm works: ${result.text}`);
+assert.doesNotMatch(renderFor(NEVER), /通用规则改过了/, 'removing the common rule stops injecting it');
+
+// 会话 off 只关会话层，通用层照常生效
+run('all add 开关测试');
+run('add 会话层专属规则');
+run('off');
+assert.match(renderFor(NEVER), /开关测试/, 'session off does not touch the common layer');
+const sessionOff = renderFor(SESSION);
+assert.match(sessionOff, /开关测试/, 'the common layer still applies to that session');
+assert.doesNotMatch(sessionOff, /会话层专属规则/, 'session off drops the session layer');
+run('on');
+assert.match(renderFor(SESSION), /会话层专属规则/, 'session on brings the session layer back');
+
+run('all clear');
+assert.equal(readdirSync(commonDir).filter((entry) => entry.endsWith('.txt')).length, 0, 'common clear deleted the files');
+
+run('reset');
+
 // 长文本截断：40 条上限 + 2400 字符上限
 for (let i = 0; i < 45; i += 1) {
   const r = run(`add 规则编号 ${i} ${'x'.repeat(60)}`);

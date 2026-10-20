@@ -1,8 +1,13 @@
 # dsh-dialog-fence
 
-> 给 DSH（DeepSeek Harness）的每一次对话设定**边界与围栏**：一套按会话隔离、随时增删、下一轮即生效的行为约束规则。
-> 每条规则就是**一个独立的 `.txt` 文件**——用任何编辑器随手改，下一轮生效。
+> 给 DSH（DeepSeek Harness）的每一次对话设定**边界与围栏**：一套随时增删、下一轮即生效的行为约束规则。
+> 每条规则就是**一个独立的 `.txt` 文件**——用任何编辑器随手改，或者直接在设置页里编辑正文。
 > 不破坏前缀缓存 · 不膨胀上下文 · 不影响其它对话 · 与 billion-context 压缩共存。
+
+两层规则，叠加注入：
+
+- **通用规则**（`rules/common/`）—— 对**每一个**对话都生效，包括新开的对话。设置页里主要就是编辑这一层。
+- **会话规则**（`rules/sessions/<会话 id>/`）—— 只叠加到某一个对话，可选，通常在会话右上角的「围栏」浮层里维护。
 
 适用形态：**`dsh` CLI（web / headless / acp 等 profile）** 与 **DSH Desktop**。
 
@@ -21,10 +26,11 @@
 dialog-fence 的做法：把规则注入到 **运行时上下文快照（runtime context）** 这一段里。
 
 ```
-rules/sessions/<会话 id>/01-xxx.txt   ← 每条规则一个文件
+rules/common/01-xxx.txt               ← 通用规则：每条一个文件，所有对话都生效
+rules/sessions/<会话 id>/01-xxx.txt   ← 会话规则：只对该会话生效，叠加在通用规则之后
 rules/state.json                      ← 只存开关（全局 + 各会话），不存正文
    └─ systemPrompt.context({ name:'dialog-fence:rules', order:118 })
-        └─ 只在 enabled 的会话返回文本，其它会话返回空串
+        └─ 通用规则 + 启用会话的专属规则 → 拼成一段文本，全都没有就返回空串
              └─ agent-loop: joinContextSections() → "Current runtime context. ..."
                   └─ RuntimeContextProjection.project()
                        ├─ 文本与上次相同  → return（一条都不追加，零 token）
@@ -37,7 +43,7 @@ rules/state.json                      ← 只存开关（全局 + 各会话）�
 2. **零无谓消耗**：文本不变时快照不落盘，同一条规则不会每轮重发。
 3. **压缩后仍存活**：快照头是 `Current runtime context`，被 billion-context 的 `dshDurableToolPath` 归为 `durable/runtime-context`，自动进 `protectedLatestTools`（只保护最新一份，旧快照可被压缩），围栏常驻且不膨胀。
 
-隔离性：规则目录以 `sessionId` 为键，未登记的会话渲染空字符串，而 `renderContextSections()` 会 `.filter(s => s.text.length > 0)` —— **空串 = 零 token、零注入、零副作用**。
+隔离性：通用规则为空、且当前会话没有启用专属规则时渲染空字符串，而 `renderContextSections()` 会 `.filter(s => s.text.length > 0)` —— **空串 = 零 token、零注入、零副作用**。（总开关关掉时，两层一起静音。）
 
 ---
 
@@ -45,10 +51,10 @@ rules/state.json                      ← 只存开关（全局 + 各会话）�
 
 | 界面 | 位置 | 能力 |
 |---|---|---|
-| 会话按钮 | 会话右上角工具区「围栏」，带规则条数徽标 | 打开本会话规则浮层 |
-| 规则浮层 | 右下角面板 | 逐条查看 / **单行内联编辑**（无 textarea）/ 删除 / 新增 / 启停 / 清空 |
-| **设置页** | 设置左栏 → **「对话围栏」**（与「通知提醒」「模型」同级） | **全局总开关** + 所有已配置会话的清单（启用状态、规则条数） |
+| **设置页** | 设置左栏 → **「对话围栏」**（与「通知提醒」「模型」同级） | **主入口**：总开关 + **通用规则全文的可视化编辑**（逐条单行内联编辑，无 textarea）+ 新增/删除/清空 |
 | **插件详情页配置区** | 左侧「插件」→ **已安装** → **dsh-dialog-fence** → 详情页（包描述与行之间） | 同一份配置界面 |
+| 会话按钮 | 会话右上角工具区「围栏」，带规则条数徽标 | 打开**本会话**规则浮层 |
+| 规则浮层 | 右下角面板 | 逐条查看 / **单行内联编辑**（无 textarea）/ 删除 / 新增 / 启停 / 清空（只影响该会话） |
 | 插件页标签页 | 设置 → **内置插件** → 「对话围栏」一页 | 同一份配置界面（老入口，仍在） |
 
 五处界面写的是同一份文件：面板改完 → 文件落盘 → 下一轮装配时重新读取 → 生效。没有任何状态分叉。
@@ -168,10 +174,8 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 
 重启后：
 
-- **会话右上角**出现「围栏」按钮，数字是当前会话的规则条数（高亮 = 已启用）。点开即浮层。
-- 每条规则占一行：左侧序号、中间正文（下面是它对应的文件名）、右侧「改」「删」。
-  点「改」把该行就地变成**单行输入框**，`Enter` 保存 / `Esc` 取消 —— **没有任何 textarea**。
-- 底部有单行输入框可直接新建一条，另有「清空」，右下角实时显示 `注入 N 字符 ≈ M token`。
+- **设置左栏 → 「对话围栏」**：主入口，直接编辑**通用规则**（对每个对话生效）。每条占一行：序号 + 正文 + 文件名 + 「改」「删」；点「改」就地变成**单行输入框**，`Enter` 保存 / `Esc` 取消 —— **没有任何 textarea**。底部输入框新建一条，另有「清空全部」，右侧实时显示 `注入 N 字符 ≈ M token`。
+- **会话右上角**出现「围栏」按钮，数字是当前会话**专属**规则的条数（高亮 = 已启用）。点开浮层，维护的只是这个对话的额外规则。
 - 所有改动**下一轮生效**，无需重启。
 
 **三处配置入口**（渲染的是同一个组件，内容和行为完全一致）：
@@ -182,9 +186,10 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 
 三处都有：
 
-- **总开关**（关掉后所有会话立即零注入，规则文件原封不动）
-- 会话清单表：会话 id / 启用状态 / 规则条数
-- 数据目录路径（方便直接去改文件）
+- **总开关**（关掉后所有对话立即零注入，规则文件原封不动）
+- 通用规则的**完整可视编辑**（新增 / 改 / 删 / 清空）
+- 规则目录路径（方便直接去改文件）
+- 一句提示：会话专属规则的条数（不再罗列 sessionId）
 
 面板与这三处配置页都只在 Web 形态出现（CLI / TUI / headless 没有 `connection` 服务，插件会自动跳过路由注册，`/fence` 命令照常可用）。
 
@@ -193,12 +198,16 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 | 命令 | 作用 |
 |---|---|
 | `/fence` | 查看状态（启用与否、条数、实际注入文本、token 估算） |
-| `/fence on` / `/fence off` | 启用 / 停用本会话围栏 |
-| `/fence add <规则文本>` | 追加一条规则（= 新建一个 txt；自动启用；重复文本不会重复添加） |
-| `/fence rm <序号>` | 删除第 N 条（= 删除对应 txt） |
+| `/fence on` / `/fence off` | 启用 / 停用本会话的专属规则（不影响通用规则） |
+| `/fence add <规则文本>` | 追加一条**本会话**专属规则（= 新建一个 txt；自动启用；重复文本不会重复添加） |
+| `/fence rm <序号>` | 删除本会话第 N 条 |
 | `/fence clear` | 清空本会话规则文件（保留启用状态） |
 | `/fence reset` | 彻底删除本会话记录（等于从未配置过） |
-| `/fence dir` | 打印本会话规则目录与全局 state.json 路径 |
+| `/fence dir` | 打印本会话规则目录、通用规则目录与 state.json 路径 |
+| **`/fence all`** | 查看**通用规则**（对每个对话都生效） |
+| **`/fence all add <规则文本>`** | 追加一条通用规则 |
+| **`/fence all rm <序号>`** | 删除第 N 条通用规则 |
+| **`/fence all clear`** | 清空通用规则 |
 | `/fence help` | 帮助 |
 
 ### 直接编辑规则文件（推荐给「随时配置和维护」）
@@ -208,11 +217,16 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 ```
 <DSH_HOME>/dialog-fence/rules/
 ├── state.json                          ← 只存开关，不存正文
-└── sessions/
+├── common/                             ← 通用规则：对每个对话都生效
+│   ├── 01-evidence.txt                 ← 文件名前缀决定注入顺序
+│   └── 02-uncertainty.txt
+└── sessions/                           ← 会话规则：只对该会话生效
     └── session-<uuid>/
-        ├── 01-no-outside-edits.txt     ← 文件名前缀决定注入顺序
+        ├── 01-no-outside-edits.txt
         └── 02-flag-uncertainty.txt
 ```
+
+注入顺序：先用 `common/` 里的规则编号 1..N，再把该会话启用的专属规则接在后面编号。总开关关掉时两层一起静音。
 
 > 为什么规则不放在包目录里：0.5.0 起本插件可以作为组合包被官方安装器装进
 > `profiles/.generations/live/<gen>/node_modules/dsh-dialog-fence/`，那个目录每次升级
@@ -223,15 +237,16 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 
 规则就是「目录里有几个 txt，就有几条规则」：
 
-- **往里丢一个 `.txt`** → 该会话自动启用并生效（即使 `state.json` 里没有这个会话）。
+- **往 `common/` 里丢一个 `.txt`** → 所有对话立即生效（包括新开的），无需任何开关登记。
+- **往 `sessions/<id>/` 里丢一个 `.txt`** → 该会话自动启用并生效（即使 `state.json` 里没有这个会话）。
 - **改文件内容** → 下一轮注入的文本跟着变。
 - **删文件** → 规则消失。
 - 空白文件不算规则（跳过）。
 
 要点：
 
-- 键是会话 id（`/fence status` 或 `/fence dir` 会打印当前会话 id）。
-- **单条 ≤ 2000 字符；每会话最多 40 条；渲染上限 2400 字符**（超出会截断并注明 `fence truncated: N/M rules shown`）。
+- 通用规则与当前会话无关；会话规则的键是会话 id（`/fence status` 或 `/fence dir` 会打印当前会话 id）。
+- **单条 ≤ 2000 字符；每层最多 40 条；渲染总上限 2400 字符**（超出会截断并注明 `fence truncated: N/M rules shown`）。
 - 规则里**不要写 `{{ }}`**：宿主的 `interpolate()` 遇到未注册变量会抛错。插件已用 `try/catch` 兜底降级为空，但内容会静默失效。
 - 文件写入请用 UTF-8。插件对 UTF-8 BOM 与 UTF-16LE 都做了兼容（历史事故：PowerShell 写坏过一次），但别依赖它。
 
@@ -258,8 +273,7 @@ dialog-fence/
 ├── icon.svg            插件页图标
 ├── package.json        dsh.bundle.patch / dsh.client / icon 声明
 ├── cordis.patch.yml    bundle 安装层（方式 A 用）
-├── rules/              开发态遗留的规则目录（0.5.0 起数据在 <DSH_HOME>/dialog-fence/rules，已在 .gitignore 中）
-├── scripts/install.mjs 一键安装器（方式 B 用，同时支持 dsh 与 DSH Desktop）
+├── rules/              开发态遗留的规则目录（0.5.0 起数据在 <DSH_HOME>/dialog-fence/rules，已在 .gitignore 中）├── scripts/install.mjs 一键安装器（方式 B 用，同时支持 dsh 与 DSH Desktop）
 ├── test/               smoke（宿主逻辑）/ route（HTTP API）/ client（bundle 形态）/ render（真 React 首帧）
 └── docs/               设计与实施方案、运维手册与变更记录
 ```

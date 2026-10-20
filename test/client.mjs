@@ -189,10 +189,45 @@ assert.equal(headerTree.props.className, 'dialog-fence-trigger');
 // Panel 在没打开任何会话时返回 null（浮层不占 DOM）
 assert.equal(Panel(), null);
 
-// 配置页第一帧（还没拉到 overview）也要能渲染
+// 配置页第一帧（还没拉到快照）也要能渲染
 const sectionTree = FencePage();
 assert.equal(sectionTree.type, 'div');
 assert.equal(sectionTree.props.className, 'dialog-fence-page');
+
+// 设置页的主视图必须是「可直接编辑的规则列表」，不是会话清单。
+// 假 React 的 useState 返回初值、useEffect 不执行，所以这里只能看首帧骨架：
+// 但「会话表」的结构（.dialog-fence-table / .dialog-fence-tr）必须彻底消失。
+function collectText(node, out = []) {
+  if (node === null || node === undefined || node === false) return out;
+  if (typeof node === 'string' || typeof node === 'number') {
+    out.push(String(node));
+    return out;
+  }
+  if (Array.isArray(node)) {
+    for (const child of node) collectText(child, out);
+    return out;
+  }
+  collectText(node.children, out);
+  return out;
+}
+function collectClass(node, out = new Set()) {
+  if (node === null || node === undefined || node === false) return out;
+  if (Array.isArray(node)) {
+    for (const child of node) collectClass(child, out);
+    return out;
+  }
+  if (typeof node !== 'object') return out;
+  if (typeof node.props?.className === 'string') out.add(node.props.className);
+  collectClass(node.children, out);
+  return out;
+}
+const sectionText = collectText(sectionTree).join(' ');
+const sectionClasses = collectClass(sectionTree);
+assert.match(sectionText, /围栏规则（对每个对话生效）/, 'the rule editor is the main view of the settings page');
+assert.match(sectionText, /读取中/, 'first frame shows the loading placeholder for the common layer');
+assert.ok(sectionClasses.has('dialog-fence-input'), 'the page offers an inline rule input');
+assert.equal(sectionClasses.has('dialog-fence-table'), false, 'the session table is gone');
+assert.equal(sectionClasses.has('dialog-fence-tr'), false, 'no per-session rows on the settings page');
 
 // 组合包详情页传入的是 { view: 'page' }，此时用紧凑版式（详情页自己有标题与留白）
 const bundleTree = BundleConfig({ view: 'page' });

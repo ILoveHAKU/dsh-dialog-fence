@@ -189,7 +189,61 @@ assert.equal(payload.globalEnabled, true);
 payload = await (await getSession(SESSION)).json();
 assert.ok(payload.rendered.length > 0, 'turning the global switch back on restores injection');
 
-// ---- 8) 错误路径：必须是 400，且不能崩 --------------------------------------
+// ---- 8) 通用规则层（scope=common）：对每个对话生效，不需要 sessionId -----------
+const getCommon = () => route.fetch(new Request(`${base}?scope=common`, { method: 'GET' }));
+const postCommon = (body) => post({ scope: 'common', ...body });
+
+payload = await (await getCommon()).json();
+assert.equal(payload.ok, true, 'common snapshot is readable');
+assert.equal(payload.scope, 'common');
+assert.deepEqual(payload.rules, [], 'the common layer starts empty in a fresh profile');
+
+payload = await (await postCommon({ action: 'add', text: '通用规则 A' })).json();
+assert.equal(payload.ok, true, `common add worked: ${JSON.stringify(payload)}`);
+assert.equal(payload.rules.length, 1);
+assert.match(payload.rules[0].file, /^01-.*\.txt$/, 'common rules also live one-per-txt');
+assert.ok(existsSync(join(dataDir, 'common')), 'common rules live in rules/common');
+
+// 通用规则出现在任何会话的渲染结果里（会话没开也生效）
+payload = await (await getSession('session-never-configured')).json();
+assert.match(payload.rendered, /通用规则 A/, 'common rules apply to a session that was never configured');
+assert.equal(payload.enabled === false, true, 'the session row itself is still "not configured"');
+
+// 会话层叠加在通用层之后，编号连续
+await post({ sessionId: SESSION, action: 'toggle', enabled: true });
+await post({ sessionId: SESSION, action: 'add', text: '会话专属 B' });
+payload = await (await getSession(SESSION)).json();
+assert.match(payload.rendered, /通用规则 A/);
+assert.match(payload.rendered, /会话专属 B/);
+assert.ok(
+  payload.rendered.indexOf('通用规则 A') < payload.rendered.indexOf('会话专属 B'),
+  'common rules come before the session ones',
+);
+
+// 改 / 删通用规则按文件名寻址
+const commonFile = (await (await getCommon()).json()).rules[0].file;
+payload = await (await postCommon({ action: 'update', file: commonFile, text: '通用规则 A 改' })).json();
+assert.match(payload.rendered, /通用规则 A 改/);
+payload = await (await postCommon({ action: 'remove', file: commonFile })).json();
+assert.deepEqual(payload.rules, []);
+assert.equal((await (await getSession(SESSION)).json()).rendered.includes('通用规则 A 改'), false, 'removal is global');
+
+// 总开关关掉 → 通用层与会话层一起零注入
+await postCommon({ action: 'add', text: '开关测试' });
+await post({ action: 'toggleGlobal', enabled: false });
+assert.equal((await (await getSession(SESSION)).json()).rendered, '', 'global off also kills the common layer');
+assert.equal((await (await getCommon()).json()).rendered, '', 'and the common snapshot reports empty');
+await post({ action: 'toggleGlobal', enabled: true });
+assert.match((await (await getSession(SESSION)).json()).rendered, /开关测试/);
+
+// 通用层 clear / reset
+payload = await (await postCommon({ action: 'clear' })).json();
+assert.deepEqual(payload.rules, []);
+await postCommon({ action: 'add', text: '再清一次' });
+payload = await (await postCommon({ action: 'reset' })).json();
+assert.deepEqual(payload.rules, []);
+
+// ---- 9) 错误路径：必须是 400，且不能崩 --------------------------------------
 assert.equal((await post({ sessionId: SESSION, action: 'unknown' })).status, 400, 'unknown action rejected');
 assert.equal((await post({ sessionId: '', action: 'add', text: 'x' })).status, 400, 'empty sessionId rejected');
 assert.equal((await post({ sessionId: 'a/b', action: 'add', text: 'x' })).status, 200, 'path chars are sanitized, not fatal');
@@ -232,7 +286,7 @@ assert.equal((await route.fetch(new Request(base, { method: 'DELETE' }))).status
 const head = await route.fetch(new Request(`${base}?sessionId=${SESSION}`, { method: 'HEAD' }));
 assert.equal(head.status, 200);
 
-// ---- 9) 没有 connection 服务（CLI / TUI / headless）：整段跳过，不抛 -------------
+// ---- 10) 没有 connection 服务（CLI / TUI / headless）：整段跳过，不抛 -----------
 const cliCtx = makeCtx({ withConnection: false });
 await mod.apply(cliCtx);
 assert.equal(routes.length, 1, 'no extra route registered without the connection service');
