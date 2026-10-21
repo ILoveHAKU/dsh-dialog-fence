@@ -315,7 +315,7 @@ npm run test:opensource   # 只跑泄漏扫描（见下）
 | `test/route.mjs` | HTTP 路由：`/api/dialog-fence` 的 GET/POST、各 action、错误码 | 不需要 |
 | `test/client.mjs` | `client.js` 的 bundle 形态：懒 CJS 工厂、槽位注册、源码级断言 | 不需要 |
 | `test/render.mjs` | 用**真 React** 做服务端首帧渲染（`renderToStaticMarkup`），断言面板/设置页的 DOM | **需要本机的 DSH 安装**（找不到就打印 SKIP 并以 0 退出） |
-| `test/opensource.mjs` | 开源前泄漏扫描：真实姓名/hostname/内部编号/真实 session id/绝对用户路径 | 不需要 |
+| `test/opensource.mjs` | 开源前泄漏扫描：真实姓名（含裸名）/姓氏形态/hostname/内部编号/真实 session id/绝对用户路径，**文件与 commit message 都扫** | 不需要 |
 
 `test/render.mjs` 按下面的顺序找 React，找不到就 SKIP：
 
@@ -350,6 +350,9 @@ gh auth refresh -h github.com -s workflow
 - `git push` 在 PowerShell 里**成功后仍显示 `[exit code: 1]`** —— git 把 `To https://…` 写 stderr，pwsh 当异常。判据取 `git ls-remote origin` 的实际 ref 值。
 - 重写历史后推的是**重写后的新对象**，`--force-with-lease` 会因远端仍是旧对象而拒绝，需 `git push --force`（先确认远端没有别人的提交）；tag 要单独 `git push --force origin --tags`，因为「强制更新 tag」不是默认行为。
 - 推完之后**从远端重新 clone 一份复验**：`git grep` 工作树 + 全部历史、`git tag` 数量、五套测试。本地干净不等于远端干净。
+- **`git push --force` 不会删掉旧 commit 对象。** 只要知道旧 SHA 或旧 tag，`raw.githubusercontent.com/<owner>/<repo>/<旧SHA>/<path>` 和 `codeload…/tar.gz/<旧tag>` 仍能**匿名**取到内容。所以「历史重写 → force push」之后，验证判据必须是**去取那个本该消失的 SHA、期望 404**；只验「新 clone 里 grep 不到」是不够的（那只证明新历史干净）。GitHub 没有自助回收不可达对象的入口，真要清除只能**删库重建**或保持 private 找 Support。
+- **发布前用一条比扫描器更宽的检索对撞一次。** 本仓库的 `test/opensource.mjs` 第一版 `real-name` 规则要求「名 + 姓」同时出现，于是文档里只写裸名的一句话被放过，整个发布流程（重写历史 → 重写 message → 删库重建 → 转 public → 配保护）因此做了两遍。规则与验证必须是两个独立实现、强度不同：扫描器越怕误报就越容易在「没想到的形态」上失守。放宽规则后记得做反向验证（造一个含敏感词的临时文件 → 确认变红 → 删掉 → 确认转绿），否则「规则太松」和「真的很干净」读数一样。
+
 
 ## 文档
 
