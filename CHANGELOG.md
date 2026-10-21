@@ -14,7 +14,7 @@
 
 ### 新增
 
-- `test/opensource.mjs`：泄漏扫描器，5 条规则（真实姓名 / hostname / 内部对话编号 / 真实 session id / 绝对用户路径），**文件与 commit message 都扫**，并顺带验证 `.gitignore` 真的挡住了 `fence.json` 与 `rules/`。已并入 `npm test`，另有 `npm run test:opensource` 单独跑。
+- `test/opensource.mjs`：泄漏扫描器，6 条规则（真实姓名 / 姓-IT 形态 / hostname / 内部对话编号 / 真实 session id / 绝对用户路径），**文件与 commit message 都扫**，并顺带验证 `.gitignore` 真的挡住了 `fence.json` 与 `rules/`。已并入 `npm test`，另有 `npm run test:opensource` 单独跑。
 - `.github/workflows/test.yml`：在 ubuntu + node 22 上跑 `npm test`。**没有它，GitHub 的「Require status checks」选不到任何 job，PR 会永久卡在 pending。**
 - `.github/workflows/triage.yml`：只读元数据地自动关闭「正文过短 / 标题只有一条链接 / （可选）新注册账号」的 issue 与 PR，**绝不 checkout PR 代码**。
 - `.github/pull_request_template.md`、`.github/ISSUE_TEMPLATE/{bug_report,feature_request,config}.yml`、`.github/SECURITY.md`。
