@@ -14,7 +14,7 @@
 
 ### 新增
 
-- `test/opensource.mjs`：泄漏扫描器，5 条规则（真实姓名 / hostname / 内部对话编号 / 真实 session id / 绝对用户路径），并顺带验证 `.gitignore` 真的挡住了 `fence.json` 与 `rules/`。已并入 `npm test`，另有 `npm run test:opensource` 单独跑。
+- `test/opensource.mjs`：泄漏扫描器，5 条规则（真实姓名 / hostname / 内部对话编号 / 真实 session id / 绝对用户路径），**文件与 commit message 都扫**，并顺带验证 `.gitignore` 真的挡住了 `fence.json` 与 `rules/`。已并入 `npm test`，另有 `npm run test:opensource` 单独跑。
 - `.github/workflows/test.yml`：在 ubuntu + node 22 上跑 `npm test`。**没有它，GitHub 的「Require status checks」选不到任何 job，PR 会永久卡在 pending。**
 - `.github/workflows/triage.yml`：只读元数据地自动关闭「正文过短 / 标题只有一条链接 / （可选）新注册账号」的 issue 与 PR，**绝不 checkout PR 代码**。
 - `.github/pull_request_template.md`、`.github/ISSUE_TEMPLATE/{bug_report,feature_request,config}.yml`、`.github/SECURITY.md`。
@@ -24,6 +24,7 @@
 ### 变更
 
 - **重写 git 历史**，清掉本机用户名。原来散布在 10 个 commit 的 blob 里，共 53 处绝对用户路径；tag 一并重建（`v0.2.0`–`v0.9.0` 全部指向重写后的 commit）。
+- **commit message 也重写了一遍**：第一遍只改了工作树，message 里还留着内部编号与一句逐字的用户原话；扫描器补上 message 扫描后才发现（命中 3 条），用 `--msg-filter` 整条替换（只留「问题 + 做法」，不留对话记录）。
 - 文档与测试里的本机绝对路径统一改成占位符（`C:\Users\<你>`，URL 形态 `%3C你%3E`）。
 - 文档与代码注释里的内部对话编号（形如 `mNNNNN`）改成 **`CR-NN`**（按首次出现的时间顺序编号）。它们是正文里大量交叉引用的锚点（「已被 X 推翻」「见 5.5.7」），所以不能删空，只能换名。
 - 真实会话 id 改成占位符 `session-<uuid>`。
@@ -36,6 +37,16 @@
 - 五套测试本地全绿；CI（ubuntu + node 22）两次 `success`。
 - 从远端重新 clone 一遍再验：25 个跟踪文件、12 个 commit、9 个 tag、工作树与**全部历史**均 0 命中。本地干净不等于远端干净（`refs/original/`、未推的 tag 都会让假象成立）。
 - 转 public 后做**匿名**复验：清空 `credential.helper` 仍能 clone，仓库页与 raw README 均 HTTP 200，API 报 `"private": false` —— 证明陌生访客真的能拿到。
+
+### 发布事故与处置：force push 不会删掉旧 commit
+
+**这一条是本次发布的真实事故，写在这里是因为它可能发生在任何做过历史重写的仓库上。**
+
+- `git push --force` 只移动 ref，**旧 commit 对象仍留在 GitHub 上，且匿名可取**。实测：`raw.githubusercontent.com/<owner>/<repo>/<旧SHA>/<path>` 返回 200，内容里本机用户名命中 6 处；旧 tag 走 `codeload` 打包下载同样可取。
+- 当时的仓库已经转成 public，所以旧对象里的本机用户名处于真实匿名暴露状态。**先改回 private 止血**（匿名取仓库页 → 404）。
+- **补救只能是删库重建**：GitHub 没有自助回收不可达对象的入口，force push 也不会触发回收。旧对象随旧仓库一起消失。
+- 之前「远端干净」的验证漏了一问：只验了「新 clone 的 worktree 与 master 历史 0 命中」，没验「旧 SHA 还在不在」。**验证「已清除」必须去取那个本该消失的东西。**
+- 重建后重新配置：description、8 个 topics、`has_discussions=true`（issue 表单的 contact_links 指向它，不开就是死链）、actions 权限、默认分支、master 分支保护。
 
 ### 推送注意
 
