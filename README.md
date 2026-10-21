@@ -331,6 +331,26 @@ export DSH_ASAR="D:\\DSH Desktop\\resources\\app.asar\\node_modules"   # 或者�
 
 **`node_modules` 不是可选项而是不存在**：改完源码**必须重启 DSH** 才生效（`dsh-hmr` 不重载本插件的宿主半边），细节见[运维手册 · 怎么改插件代码](docs/运维手册与变更记录.md)。
 
+### 推送与发布（踩过的坑）
+
+**改动含 `.github/workflows/` 时，`repo` 权限的令牌推不上去**：
+
+```
+refusing to allow an OAuth App to create or update workflow `.github/workflows/test.yml` without `workflow` scope
+```
+
+GitHub 对 workflow 文件单独要求一条权限。补法（device flow，令牌不经过命令行）：
+
+```bash
+gh auth refresh -h github.com -s workflow
+```
+
+其它两条容易误判的现象：
+
+- `git push` 在 PowerShell 里**成功后仍显示 `[exit code: 1]`** —— git 把 `To https://…` 写 stderr，pwsh 当异常。判据取 `git ls-remote origin` 的实际 ref 值。
+- 重写历史后推的是**重写后的新对象**，`--force-with-lease` 会因远端仍是旧对象而拒绝，需 `git push --force`（先确认远端没有别人的提交）；tag 要单独 `git push --force origin --tags`，因为「强制更新 tag」不是默认行为。
+- 推完之后**从远端重新 clone 一份复验**：`git grep` 工作树 + 全部历史、`git tag` 数量、五套测试。本地干净不等于远端干净。
+
 ## 文档
 
 - [设计与实施方案](docs/设计与实施方案.md) —— 方案、红线、源码级依据、被否决的替代路线

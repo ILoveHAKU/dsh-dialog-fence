@@ -30,6 +30,13 @@
 - `test/render.mjs` 不再写死本机安装路径，改用 `DSH_ASAR` / `DSH_INSTALL` 环境变量，默认值仍是 Windows 常见位置；找不到真 React 时 SKIP 并以 0 退出（这是 CI 能跑通的前提）。
 - README 补「开发与跑测试」一节；「与 billion-context 的关系」降级为**当时的选型理由**，并注明对方版本一变、行号级依据就可能失效。
 
+- 新增「从远端重新 clone 一遍再验」的步骤并实际执行：干净克隆里 25 个跟踪文件、9 个 tag、工作树与**全部历史**均 0 命中，五套测试同样全绿。本地干净不等于远端干净（`refs/original/`、未推的 tag 都会让假象成立）。
+
+### 推送注意
+
+- 本次改动含 `.github/workflows/test.yml`，**`repo` scope 的令牌推不上去**，会报 `refusing to allow an OAuth App to create or update workflow ... without 'workflow' scope`。需先用 `gh auth refresh -h github.com -s workflow` 补权限。判定命令与代理要求见运维手册「症状：`git push` 被拒」。
+- `git push` 在 PowerShell 里成功后仍显示 `[exit code: 1]`（git 把进度写 stderr）。判据取 `git ls-remote` 的实际 ref 值。
+
 ### 已知限制
 
 - `test/render.mjs` 需要本机有一份 DSH 安装才能真跑，CI 上恒定 SKIP。所以「首帧渲染」这一层在 CI 上是没有覆盖的，只能本地验证。
