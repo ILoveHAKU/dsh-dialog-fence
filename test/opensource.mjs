@@ -141,14 +141,62 @@ function assert(condition, message) {
   }
 }
 
+// 扫 commit message。
+//
+// 为什么必须扫：第一次开源前，文件全部扫干净了，但 `git log` 里还留着
+// 「User report (mNNNNN): "用户原话…"」这种消息——文件扫描器看不见它们。
+// 公开之后 `git log` 是最好读的东西，对话原文和内部编号都会跟着公开。
+//
+// 用 --branches --tags 而不是 --all：`--all` 会把 refs/original/* 也算进来
+// （filter-branch 留下的旧历史备份），导致扫到已经不该存在的旧提交。
+function scanCommitMessages() {
+  let shas;
+  try {
+    shas = execFileSync('git', ['log', '--branches', '--tags', '--format=%H'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    })
+      .split(/\r?\n/)
+      .filter(Boolean);
+  } catch {
+    return { scanned: 0, hits: [] }; // 不是 git 仓库（例如解压出来的源码包）就跳过
+  }
+  const found = [];
+  for (const sha of shas) {
+    const message = execFileSync('git', ['log', '-1', '--format=%B', sha], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    for (const rule of RULES) {
+      const flags = rule.pattern.flags.includes('g') ? rule.pattern.flags : `${rule.pattern.flags}g`;
+      for (const match of message.matchAll(new RegExp(rule.pattern.source, flags))) {
+        if (typeof rule.allow === 'function' && rule.allow(match)) continue;
+        found.push({
+          rule: rule.id,
+          hint: `${rule.hint}（出现在 commit message 里）`,
+          file: `commit ${sha.slice(0, 8)}`,
+          line: 0,
+          excerpt: match[0].length > 40 ? `${match[0].slice(0, 40)}…` : match[0],
+        });
+      }
+    }
+  }
+  return { scanned: shas.length, hits: found };
+}
+
+const commits = scanCommitMessages();
+hits.push(...commits.hits);
+
 // 本机运行数据必须被 .gitignore 挡住——这是 fence.json / rules/ 里的会话 id 不外泄的唯一保证
 assert(!files.some((f) => path.basename(f) === 'fence.json'), '.gitignore 应忽略本地数据文件 fence.json');
 assert(!files.some((f) => path.relative(ROOT, f).replace(/\\/g, '/').startsWith('rules/')), '.gitignore 应忽略本地数据目录 rules/');
 
 if (hits.length === 0) {
-  console.log(`OK all opensource assertions passed（扫描 ${files.length} 个待公开文本文件，0 处命中）`);
+  console.log(`OK all opensource assertions passed（扫描 ${files.length} 个待公开文本文件 + ${commits.scanned} 条 commit message，0 处命中）`);
 } else {
-  console.error(`FAIL: 扫描 ${files.length} 个待公开文本文件，命中 ${hits.length} 处：`);
+  console.error(`FAIL: 扫描 ${files.length} 个待公开文本文件 + ${commits.scanned} 条 commit message，命中 ${hits.length} 处：`);
   const byRule = new Map();
   for (const hit of hits) {
     if (!byRule.has(hit.rule)) byRule.set(hit.rule, []);
