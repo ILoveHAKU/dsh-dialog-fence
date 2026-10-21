@@ -1,0 +1,11 @@
+# 关掉「空白 issue」入口：必须走下面的表单模板。
+# 这是过滤广告 / SEO 垃圾 issue 的第一道也是最有效的一道闸。
+blank_issues_enabled: false
+
+contact_links:
+  - name: 使用问题 / 装不上 / 规则不生效
+    url: https://github.com/ILoveHAKU/dsh-dialog-fence/discussions
+    about: 先到 Discussions 提问。Issues 只收「能稳定复现的 bug」和「明确的功能请求」。
+  - name: 安全漏洞
+    url: https://github.com/ILoveHAKU/dsh-dialog-fence/security/advisories/new
+    about: 请走私密漏洞报告，不要开公开 issue。

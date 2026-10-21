@@ -1,0 +1,74 @@
+name: triage
+
+# 只做一件事：把「空壳提交」和「纯链接标题」这类批量垃圾自动关掉。
+# 真正的广告 issue（正文塞满关键词）靠这里拦不住 —— 靠 interaction limits + 举报，见 README 的开源说明。
+
+on:
+  issues:
+    types: [opened]
+  # pull_request_target 给的是默认分支上下文的写权限，因此这里【只读元数据】，
+  # 绝不 checkout PR 代码、绝不执行 PR 里的任何东西。
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    # 维护者自己开的单不拦
+    if: github.actor != github.repository_owner
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          # 改成 true 则同时关闭「账号注册不足 1 天」的新号提交（误伤风险自负）
+          CLOSE_NEW_ACCOUNTS: 'false'
+        with:
+          script: |
+            const isIssue = context.eventName === 'issues';
+            const item = isIssue ? context.payload.issue : context.payload.pull_request;
+            const body = (item.body || '').trim();
+            const title = (item.title || '').trim();
+
+            const tooShort = body.length < 20;
+            const linkOnlyTitle = /^https?:\/\/\S+$/i.test(title);
+
+            let youngAccount = false;
+            if (process.env.CLOSE_NEW_ACCOUNTS === 'true') {
+              const { data: user } = await github.rest.users.getByUsername({ username: context.actor });
+              youngAccount = (Date.now() - new Date(user.created_at).getTime()) < 24 * 3600 * 1000;
+            }
+
+            if (!tooShort && !linkOnlyTitle && !youngAccount) return;
+
+            const why = tooShort ? '正文过短，看起来不是真实的问题描述'
+              : linkOnlyTitle ? '标题只有一条链接，像是广告投放'
+              : '账号注册时间过短';
+
+            const n = item.number;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: n,
+              body: [
+                `已自动关闭：${why}。`,
+                '',
+                isIssue
+                  ? '如果这是误判，请按 bug 表单重新提交一次（带复现步骤和版本号），或者到 Discussions 提问。'
+                  : '如果这是真实改动，请把正文补全（改了什么、为什么、怎么验证），我会重开。',
+              ].join('\n'),
+            });
+
+            if (isIssue) {
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: n, state: 'closed', state_reason: 'not_planned',
+              });
+            } else {
+              await github.rest.pulls.update({
+                owner: context.repo.owner, repo: context.repo.repo,
+                pull_number: n, state: 'closed',
+              });
+            }

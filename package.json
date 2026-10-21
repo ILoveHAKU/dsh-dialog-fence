@@ -1,6 +1,6 @@
 {
   "name": "dsh-dialog-fence",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "description": "A dialogue fence stored in one JSON file: a shared rule list that applies to every conversation plus an optional per-session list, injected into the runtime-context snapshot (cache-safe, append-only, compression-durable). The file location is customizable and can be opened from the UI, and every open attempt reports its outcome instead of failing silently. Installs as a normal DSH bundle, so it shows up under Plugins -> Installed and can be installed/removed with the official installer; its rules are edited on the Settings page, in its own bundle page, and in the conversation panel.",
   "type": "module",
@@ -18,11 +18,12 @@
     "icon.svg",
     "scripts",
     "docs",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=20.16.0"
   },
   "dsh": {
     "manifestVersion": 1,
@@ -44,7 +45,8 @@
     }
   },
   "scripts": {
-    "test": "node test/smoke.mjs && node test/route.mjs && node test/client.mjs && node test/render.mjs",
+    "test": "node test/smoke.mjs && node test/route.mjs && node test/client.mjs && node test/render.mjs && node test/opensource.mjs",
+    "test:opensource": "node test/opensource.mjs",
     "install-plugin": "node scripts/install.mjs install",
     "uninstall-plugin": "node scripts/install.mjs uninstall"
   },
@@ -62,6 +64,10 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ILoveHAKU/dsh-dialog-fence.git"
+  },
+  "homepage": "https://github.com/ILoveHAKU/dsh-dialog-fence#readme",
+  "bugs": {
+    "url": "https://github.com/ILoveHAKU/dsh-dialog-fence/issues"
   },
   "author": "ILoveHAKU",
   "license": "MIT"

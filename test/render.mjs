@@ -19,7 +19,13 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const ASAR = 'D:\\DSH Desktop\\resources\\app.asar\\node_modules';
+// 真 React 从「本机这一份 DSH 安装」里取。默认按 Windows 常见安装位置拼，
+// 也允许用环境变量覆盖（CI 上没有 DSH 安装，本测试会 SKIP 并通过）：
+//   DSH_ASAR    = <app.asar>\node_modules 的绝对路径
+//   DSH_INSTALL = DSH 安装目录（其下有 resources\app.asar\node_modules）
+const ASAR =
+  process.env.DSH_ASAR ||
+  join(process.env.DSH_INSTALL || 'D:\\DSH Desktop', 'resources', 'app.asar', 'node_modules');
 const REACT = join(ASAR, 'react', 'index.js');
 const REACT_SERVER = join(ASAR, 'react-dom', 'server.browser.js');
 const CLIENT_FILE = join(import.meta.dirname, '..', 'client.js');

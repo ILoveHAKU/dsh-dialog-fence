@@ -147,7 +147,7 @@ node scripts/install.mjs uninstall
 
 ```bash
 # 1) 无宿主测试（语法 + 行为，不会碰线上规则目录）
-node test/smoke.mjs && node test/route.mjs && node test/client.mjs && node test/render.mjs
+node test/smoke.mjs && node test/route.mjs && node test/client.mjs && node test/render.mjs && node test/opensource.mjs
 
 # 2) 重启后在任意会话里
 /fence status
@@ -271,6 +271,8 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 
 ## 与 billion-context（主动压缩）的关系
 
+> 本节记的是**当时（0.1.202）的选型理由与实测结论**，不是对 billion-context 现状的承诺。对方版本一变，下面这些行号级依据就可能失效——请以自己那份 `dist/index.js` 为准。
+
 | 场景 | 结果 |
 |---|---|
 | 围栏消息 | 落在 `Current runtime context` 快照内 → `durable/runtime-context` → 自动进 `protectedLatestTools`：**只保最新一份**，旧快照照常被压缩 |
@@ -290,16 +292,50 @@ dialog-fence/
 ├── icon.svg            插件页图标
 ├── package.json        dsh.bundle.patch / dsh.client / icon 声明
 ├── cordis.patch.yml    bundle 安装层（方式 A 用）
-├── rules/              0.3.0–0.6.x 的旧多 txt 目录（仅首次启动时供迁移读取，已在 .gitignore 中）
 ├── scripts/install.mjs 一键安装器（方式 B 用，同时支持 dsh 与 DSH Desktop）
-├── test/               smoke（宿主逻辑）/ route（HTTP API）/ client（bundle 形态）/ render（真 React 首帧）
+├── test/               smoke（宿主逻辑）/ route（HTTP API）/ client（bundle 形态）/ render（真 React 首帧）/ opensource（泄漏扫描）
+├── .github/            CI（test.yml）+ 自动分流（triage.yml）+ issue/PR 模板 + SECURITY.md
 └── docs/               设计与实施方案、运维手册与变更记录
 ```
+
+> `rules/` 是 0.3.0–0.6.x 的旧多 txt 目录，只在升级后首次启动时供迁移读取；一旦你的围栏已经是单个 JSON 文件，它就可以删。它也在 `.gitignore` 里，不会被提交。
+
+## 开发与跑测试
+
+本包**零运行时依赖**：宿主半边只用 `process.getBuiltinModule('node:fs' | 'node:path' | 'node:child_process')`，浏览器半边只 `require('react')`（由 DSH 宿主提供）。所以没有 `node_modules` 要装，也没有 lockfile。
+
+```bash
+npm test            # 按顺序跑五套测试，任一失败即非零退出
+npm run test:opensource   # 只跑泄漏扫描（见下）
+```
+
+| 测试 | 覆盖什么 | 需要宿主吗 |
+|---|---|---|
+| `test/smoke.mjs` | 宿主逻辑：围栏文件解析/原子写、规则增删改、多行文本往返、上限与截断 | 不需要 |
+| `test/route.mjs` | HTTP 路由：`/api/dialog-fence` 的 GET/POST、各 action、错误码 | 不需要 |
+| `test/client.mjs` | `client.js` 的 bundle 形态：懒 CJS 工厂、槽位注册、源码级断言 | 不需要 |
+| `test/render.mjs` | 用**真 React** 做服务端首帧渲染（`renderToStaticMarkup`），断言面板/设置页的 DOM | **需要本机的 DSH 安装**（找不到就打印 SKIP 并以 0 退出） |
+| `test/opensource.mjs` | 开源前泄漏扫描：真实姓名/hostname/内部编号/真实 session id/绝对用户路径 | 不需要 |
+
+`test/render.mjs` 按下面的顺序找 React，找不到就 SKIP：
+
+```bash
+# 默认按 Windows 常见安装位置拼
+# 也可以用环境变量指定（CI 上通常用不到，因为没有 DSH 安装）
+export DSH_INSTALL="D:\\DSH Desktop"     # 其下有 resources/app.asar/node_modules
+export DSH_ASAR="D:\\DSH Desktop\\resources\\app.asar\\node_modules"   # 或者直接给到 node_modules
+```
+
+> 如果你用的不是标准 Node（例如 DSH Desktop 自带的 Electron），用 `ELECTRON_RUN_AS_NODE=1` 跑：
+> `$env:ELECTRON_RUN_AS_NODE="1"; & "D:\DSH Desktop\DSH Desktop.exe" test\smoke.mjs`
+
+**`node_modules` 不是可选项而是不存在**：改完源码**必须重启 DSH** 才生效（`dsh-hmr` 不重载本插件的宿主半边），细节见[运维手册 · 怎么改插件代码](docs/运维手册与变更记录.md)。
 
 ## 文档
 
 - [设计与实施方案](docs/设计与实施方案.md) —— 方案、红线、源码级依据、被否决的替代路线
 - [运维手册与变更记录](docs/运维手册与变更记录.md) —— 日常操作、改代码流程、排查手册、事故记录
+- [CHANGELOG.md](CHANGELOG.md) —— 按版本记录改了什么
 
 ## 已知限制
 

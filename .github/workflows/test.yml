@@ -1,0 +1,37 @@
+name: test
+
+# 仓库里必须有一个「真的会跑 npm test」的 workflow：
+# GitHub 的分支保护里 Require status checks 只能选到「曾经成功跑过」的 job 名，
+# 没有这个文件时配保护会把 PR 永久卡在 pending（自锁）。
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # 本包零运行时依赖（宿主半边只用 process.getBuiltinModule，浏览器半边只 require react，
+      # 由 DSH 宿主提供），因此不需要 npm ci，也没有 lockfile 可装。
+      - name: 环境自检
+        run: |
+          node --version
+          git --version
+
+      # test/render.mjs 需要「本机这一份 DSH 安装」里的真 React 才能跑首帧渲染；
+      # CI 上没有 DSH，脚本会打印 SKIP 并以 0 退出（见该文件开头的说明）。
+      - name: 跑测试
+        run: npm test
