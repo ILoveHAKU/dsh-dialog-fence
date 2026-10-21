@@ -116,6 +116,46 @@ assert.match(pageMarkup, /rows="3"/, 'the new-rule textarea is three lines tall'
 const tabMarkup = renderToStaticMarkup(React.createElement(PluginsTab));
 assert.match(tabMarkup, /class="dialog-fence-page"/, 'plugins tab renders its page container');
 
+// ---- 3.5) 会话选择器：显示对话名称，绝不显示 sessionId ---------------------
+// 槽位把 useSessions 作为 standardProp 传进来（settings.section /
+// settings.plugins.tab / plugins.bundle.config 三处都有）；用它既能拿到名称，
+// 也能认出「当前对话」＝ retainedBy.mainView > 0。
+// 占位 id 故意用非十六进制字母，既能被当成「像 id 的字符串」，
+// 又不会撞上泄漏扫描器的「真实 session id」规则（那条规则只认 UUID 形的十六进制）。
+const S1 = 'session-zzzzzzzz-yyyy-wwww-vvvv-uuuuuuuuuuuu';
+const S2 = 'session-tttttttt-ssss-rrrr-qqqq-pppppppppppp';
+const fakeSessions = {
+  ids: [S1, S2],
+  byId: {
+    [S1]: {
+      id: S1,
+      displayTitle: 'SQL 邮件提醒遗漏排查',
+      title: 'SQL 邮件提醒遗漏排查',
+      retainedBy: { mainView: 1 },
+      blank: false,
+    },
+    // 这一行没有标题、displayTitle 也已退化成 id —— 界面必须自己挡掉，改用「未命名对话」。
+    [S2]: { id: S2, displayTitle: S2, retainedBy: {}, blank: true },
+  },
+};
+const useSessionsStub = (selector) => selector(fakeSessions);
+const withSessionsMarkup = renderToStaticMarkup(
+  React.createElement(FencePage, { useSessions: useSessionsStub }),
+);
+console.log(`   settings section + sessions: ${withSessionsMarkup.slice(0, 160)}…`);
+assert.match(withSessionsMarkup, /class="dialog-fence-select"/, 'the page offers a conversation picker');
+assert.match(withSessionsMarkup, /SQL 邮件提醒遗漏排查/, 'the picker shows the conversation title');
+assert.match(withSessionsMarkup, /（当前）/, 'the conversation being viewed is marked as current');
+assert.match(withSessionsMarkup, /未命名对话 2/, 'a row without a title gets a readable fallback, not its id');
+assert.doesNotMatch(withSessionsMarkup, /session-zzzzzzzz-yyyy-/, 'the picker never shows a session id');
+assert.doesNotMatch(withSessionsMarkup, /session-tttttttt-ssss-/, 'the fallback never leaks the id either');
+assert.match(withSessionsMarkup, /某个对话的额外规则（可选）/, 'the per-conversation card keeps its title');
+assert.match(
+  withSessionsMarkup,
+  /添加专属规则/,
+  'the settings page can now add a per-conversation rule (previously read-only text)',
+);
+
 // ---- 4) 组合包详情页里的配置区（owner 只传 view: 'page'）---------------------
 const bundleMarkup = renderToStaticMarkup(React.createElement(BundleConfig, { view: 'page' }));
 assert.match(bundleMarkup, /class="dialog-fence-flat"/, 'bundle config renders the flat (no outer padding) variant');

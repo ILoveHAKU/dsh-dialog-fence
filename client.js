@@ -209,6 +209,40 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------------
+    // 会话选择：名称来自客户端的 sessions store（槽位的 useSessions），
+    // 绝不把 sessionId 显示给用户。
+    // ---------------------------------------------------------------------
+
+    /**
+     * 一个对话在界面上的名字。
+     * displayTitleOf() 在「没有标题、也没有 cwd」时会退化成 sessionId，
+     * 所以这里必须显式挡掉「值等于 id」的情况 —— 用户明确要求不要看到 sessionId。
+     */
+    function sessionLabelOf(row, index) {
+      const id = String(row?.id ?? '');
+      for (const candidate of [row?.title, row?.displayTitle]) {
+        const text = typeof candidate === 'string' ? candidate.trim() : '';
+        if (text.length > 0 && text !== id) return text;
+      }
+      return `未命名对话 ${index + 1}`;
+    }
+
+    /**
+     * 「当前对话」的判据：retainedBy.mainView > 0。
+     * 与 @deepseek-ai/dsh-client-ui-workspace 里 mainSessionId() 的判法一致
+     * （那边也是 find(session => (session.retainedBy.mainView ?? 0) > 0)）。
+     */
+    function currentSessionIdOf(list) {
+      const byId = list?.byId ?? {};
+      for (const id of Object.keys(byId)) {
+        const retained = byId[id]?.retainedBy;
+        const count = typeof retained?.mainView === 'number' ? retained.mainView : 0;
+        if (count > 0) return String(id);
+      }
+      return null;
+    }
+
+    // ---------------------------------------------------------------------
     // 样式：只用主题 token，light / dark 自适应
     // ---------------------------------------------------------------------
 
@@ -273,6 +307,10 @@ window.__ModuleLoader__.load({
       '.dialog-fence-pill{padding:1px 7px;border-radius:9px;font-size:11px;',
       'background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary)}',
       '.dialog-fence-pill[data-on="true"]{background:var(--dsw-alias-brand-primary);color:#fff}',
+      // 对话下拉：选项文本是对话名称（不是 sessionId），这里只保证它跟主题一致。
+      '.dialog-fence-select{min-width:200px;max-width:320px;height:28px;padding:0 8px;border-radius:7px;',
+      'box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);',
+      'background:var(--dsw-alias-bg-layer-1);color:inherit;font:inherit;font-size:13px}',
     ].join('');
 
     const TAG_ID = `${NS}/client.css`;
@@ -427,6 +465,29 @@ window.__ModuleLoader__.load({
           refresh(sessionId);
           refreshAll();
         }
+      }, [sessionId]);
+
+      // 点面板外面就关掉。
+      // 两个必须排除的落点：
+      //  1) 面板内部（含规则编辑框、下拉框），否则一改内容就把自己关了；
+      //  2) 会话头部的「围栏」按钮 —— 它自己的 onClick 会 toggle，
+      //     如果这里先关，接着 onClick 又把 isOpen 当 false 重新打开，面板就再也关不掉。
+      react.useEffect(() => {
+        if (sessionId === null) return undefined;
+        if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return undefined;
+        const onPointerDown = (event) => {
+          const target = event?.target;
+          // 文本节点或非元素目标（合成事件、测试桩）一律不处理。
+          if (target === null || typeof target !== 'object' || typeof target.closest !== 'function') return;
+          if (target.closest('.dialog-fence-panel') !== null) return;
+          if (target.closest('.dialog-fence-trigger') !== null) return;
+          patch({ openSessionId: null });
+        };
+        // 捕获阶段：宿主浮层常在上层截走冒泡，捕获能保证先拿到。
+        document.addEventListener('mousedown', onPointerDown, true);
+        return () => {
+          document.removeEventListener('mousedown', onPointerDown, true);
+        };
       }, [sessionId]);
 
       if (sessionId === null) return null;
@@ -602,9 +663,22 @@ window.__ModuleLoader__.load({
       const [draft, setDraft] = react.useState('');
       const [draftFile, setDraftFile] = react.useState('');
       const [moving, setMoving] = react.useState(false);
+      const [draftSession, setDraftSession] = react.useState('');
+      /** 用户在下拉里挑的对话；空字符串表示「跟着默认走」。 */
+      const [picked, setPicked] = react.useState('');
       const common = snapshot.common;
       const overview = snapshot.overview;
       const busy = snapshot.busy === true;
+
+      // 槽位把 sessions store 作为 standardProp 传进来（useSessions）；
+      // 它同时提供「对话名称」与「当前对话」两个信息，所以设置页不必再问宿主。
+      // 三个注册点（settings.section / settings.plugins.tab / plugins.bundle.config）
+      // 都带这个 standardProp；万一某个 owner 没给，就退化成「不显示选择器」。
+      // 选择器必须返回 store 里的**原对象**：useSessions 底层是 useSyncExternalStore，
+      // 每次返回新建的 {} 会让快照身份一直变，轻则告警重则无限重渲染。
+      const useSessions = props?.useSessions;
+      const sessionById =
+        typeof useSessions === 'function' ? useSessions((sessionState) => sessionState?.byId ?? null) : undefined;
 
       react.useEffect(() => {
         refreshAll();
@@ -616,11 +690,59 @@ window.__ModuleLoader__.load({
       const fenceFile = common?.file ?? overview?.file ?? '';
       const notice = snapshot.notice;
 
+      // 下拉里的候选：正在运行的对话（有名字）+ 围栏文件里已经有规则的对话（可能已归档）。
+      const liveRows = [];
+      if (sessionById !== undefined && sessionById !== null) {
+        for (const id of Object.keys(sessionById)) {
+          const row = sessionById[id];
+          // 子代理不是用户眼里的「对话」，不列出来。
+          if (row?.origin === 'subagent') continue;
+          liveRows.push({ id: String(row?.id ?? id), label: sessionLabelOf(row, liveRows.length) });
+        }
+      }
+      const liveIds = new Set(liveRows.map((row) => row.id));
+      const archivedRows = [];
+      for (const row of overview?.sessions ?? []) {
+        const id = String(row.sessionId);
+        if (liveIds.has(id)) continue;
+        archivedRows.push({ id, label: `已归档对话 ${archivedRows.length + 1}` });
+      }
+      const choices = [...liveRows, ...archivedRows];
+
+      // 默认选谁：①用户手选的 ②当前对话 ③围栏里最后一个设置过规则的 ④第一个候选
+      const currentId = currentSessionIdOf(sessionById === undefined ? null : { byId: sessionById });
+      const fallbackId =
+        currentId !== null && liveIds.has(currentId)
+          ? currentId
+          : archivedRows.length > 0
+            ? archivedRows[archivedRows.length - 1].id
+            : liveRows.length > 0
+              ? liveRows[0].id
+              : '';
+      const targetSession = picked !== '' && (liveIds.has(picked) || archivedRows.some((r) => r.id === picked)) ? picked : fallbackId;
+      // <option> 的 value 用下标而不是 sessionId：sessionId 没有必要出现在 DOM 里，
+      // 而设置页有一条「不得出现会话 id」的界面约束（render 测试在守）。
+      const targetIndex = choices.findIndex((choice) => choice.id === targetSession);
+
+      // 选中哪个对话就拉哪个对话的专属规则；换选中项时上一份快照先留着，避免闪空。
+      react.useEffect(() => {
+        if (targetSession !== '') refresh(targetSession);
+      }, [targetSession]);
+
+      const targetEntry = targetSession === '' ? undefined : entryOf(targetSession);
+      const targetRules = targetEntry?.rules ?? [];
+
       const add = () => {
         const text = draft.trim();
         if (text.length === 0) return;
         act(COMMON_SCOPE, 'add', { text });
         setDraft('');
+      };
+      const addSession = () => {
+        const text = draftSession.trim();
+        if (text.length === 0 || targetSession === '') return;
+        act(targetSession, 'add', { text });
+        setDraftSession('');
       };
       const moveTo = () => {
         const target = draftFile.trim();
@@ -759,7 +881,7 @@ window.__ModuleLoader__.load({
           ),
         ),
 
-        // ---- 卡片 3：会话专属规则（次要，不再列 sessionId） ----
+        // ---- 卡片 3：单个对话的专属规则（与右上角浮层同一份数据、同一套操作） ----
         react.createElement(
           'div',
           { className: 'dialog-fence-card' },
@@ -767,13 +889,112 @@ window.__ModuleLoader__.load({
           react.createElement(
             'div',
             { className: 'dialog-fence-meta' },
-            '上面是通用规则，对每个对话都生效。如果只想给某一个对话追加规则，点那个对话右上角的「围栏」按钮，在那里维护——那些规则只会叠加到该对话，不影响其它对话。',
+            '上面是通用规则，对每个对话都生效。下面这一层只叠加到所选对话，不影响其它对话；右上角「围栏」浮层改的是同一份数据。',
           ),
-          react.createElement(
-            'div',
-            { className: 'dialog-fence-meta' },
-            sessionCount === 0 ? '目前没有任何对话设置过专属规则。' : `目前有 ${sessionCount} 个对话设置过专属规则（叠加在通用规则之后）。`,
-          ),
+          // 对话选择器：只显示名称，绝不显示 sessionId。
+          // 名字来自槽位的 useSessions（客户端 sessions store），没有名字时用「未命名对话 N」。
+          choices.length === 0
+            ? react.createElement(
+                'div',
+                { className: 'dialog-fence-empty' },
+                overview === null && sessionById === undefined ? '读取中…' : '还没有可选的对话。',
+              )
+            : react.createElement(
+                'div',
+                { className: 'dialog-fence-card-head' },
+                react.createElement('span', { className: 'dialog-fence-meta' }, '对话'),
+                react.createElement(
+                  'select',
+                  {
+                    className: 'dialog-fence-select',
+                    value: String(targetIndex < 0 ? '' : targetIndex),
+                    disabled: busy,
+                    onChange: (event) => {
+                      const next = choices[Number(event.target.value)];
+                      setPicked(next === undefined ? '' : next.id);
+                    },
+                  },
+                  choices.map((choice, choiceIndex) =>
+                    react.createElement(
+                      'option',
+                      { key: choice.id, value: String(choiceIndex) },
+                      choice.id === currentId ? `${choice.label}（当前）` : choice.label,
+                    ),
+                  ),
+                ),
+                react.createElement(
+                  'span',
+                  { className: 'dialog-fence-meta', style: { flex: 1 } },
+                  targetSession === '' ? '' : `${targetRules.length}/${targetEntry?.limits?.maxRules ?? 40} 条专属规则`,
+                ),
+              ),
+          targetSession === ''
+            ? null
+            : targetEntry === undefined || targetEntry.limits === undefined
+              ? react.createElement('div', { className: 'dialog-fence-empty' }, '读取中…')
+              : targetRules.length === 0
+                ? react.createElement('div', { className: 'dialog-fence-empty' }, '这个对话没有专属规则（只用上面的通用规则）。')
+                : targetRules.map((rule, index) =>
+                    react.createElement(RuleRow, {
+                      key: `page-session-${index}`,
+                      rule,
+                      index,
+                      busy,
+                      onSave: (target, text) => act(targetSession, 'update', { index: target, text }),
+                      onRemove: (target) => act(targetSession, 'remove', { index: target }),
+                    }),
+                  ),
+          targetSession === ''
+            ? null
+            : react.createElement('textarea', {
+                className: 'dialog-fence-textarea',
+                rows: 2,
+                spellCheck: false,
+                placeholder: '新增一条只作用于所选对话的规则。Ctrl+Enter 添加，可换行。',
+                value: draftSession,
+                onChange: (event) => setDraftSession(event.target.value),
+                onKeyDown: (event) => {
+                  if (event.key === 'Enter' && (event.ctrlKey === true || event.metaKey === true)) {
+                    event.preventDefault();
+                    addSession();
+                  }
+                },
+              }),
+          targetSession === ''
+            ? null
+            : react.createElement(
+                'div',
+                { className: 'dialog-fence-card-head' },
+                react.createElement(
+                  'button',
+                  { type: 'button', className: 'dialog-fence-btn', 'data-primary': 'true', disabled: busy || draftSession.trim().length === 0, onClick: addSession },
+                  '添加专属规则',
+                ),
+                react.createElement(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dialog-fence-btn',
+                    disabled: busy || targetRules.length === 0,
+                    onClick: () => act(targetSession, 'clear'),
+                  },
+                  '清空该对话的专属规则',
+                ),
+                react.createElement(
+                  'span',
+                  { className: 'dialog-fence-meta', style: { flex: 1 } },
+                  targetEntry === undefined || targetEntry.limits === undefined
+                    ? ''
+                    : `注入 ${targetEntry.chars ?? 0} 字符 ≈ ${targetEntry.tokens ?? 0} token（仅在叠加通用规则之后）`,
+                ),
+              ),
+          sessionCount === 0
+            ? null
+            : react.createElement(
+                'div',
+                { className: 'dialog-fence-meta' },
+                `目前有 ${sessionCount} 个对话设置过专属规则（叠加在通用规则之后）。`,
+              ),
         ),
 
         // ---- 卡片 4：注入路径说明 ----

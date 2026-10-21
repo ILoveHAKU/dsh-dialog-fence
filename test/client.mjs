@@ -28,6 +28,10 @@ import { pathToFileURL } from 'node:url';
 const CLIENT_FILE = join(import.meta.dirname, '..', 'client.js');
 
 // ---- 假 React：只提供 client.js 实际用到的 API -------------------------------
+// useEffect 会**真的执行**：浮层的「点外部关闭」是靠 document 监听实现的，
+// 不跑 effect 就永远测不到它（只能靠正则去猜源码）。这里把 cleanup 收起来，
+// 顺便也能验证「监听器随组件卸载被摘掉、不会泄漏」。
+const effectCleanups = [];
 const react = {
   createElement(type, props, ...children) {
     return { type, props: props ?? {}, children };
@@ -35,7 +39,10 @@ const react = {
   useState(initial) {
     return [typeof initial === 'function' ? initial() : initial, () => {}];
   },
-  useEffect() {},
+  useEffect(callback) {
+    const cleanup = callback();
+    if (typeof cleanup === 'function') effectCleanups.push(cleanup);
+  },
 };
 
 // ---- 假 window.__ModuleLoader__ --------------------------------------------
@@ -48,7 +55,10 @@ globalThis.window = {
   },
 };
 
-// ---- 假 document（ensureCss 会走一次） --------------------------------------
+// ---- 假 document（ensureCss 会走一次；mousedown 监听要能装、能摘） ------------
+// 「点外部关闭」完全依赖 document 级监听，所以这里必须真的记录注册表：
+// 装了几次、摘了几次、回调能不能被触发，都要可观察。
+const listeners = new Map();
 const styles = [];
 globalThis.document = {
   querySelector() {
@@ -61,6 +71,19 @@ globalThis.document = {
     appendChild(node) {
       styles.push(node);
     },
+  },
+  addEventListener(type, callback, capture) {
+    const key = `${type}:${capture === true ? 'capture' : 'bubble'}`;
+    if (!listeners.has(key)) listeners.set(key, new Set());
+    listeners.get(key).add(callback);
+  },
+  removeEventListener(type, callback, capture) {
+    const key = `${type}:${capture === true ? 'capture' : 'bubble'}`;
+    listeners.get(key)?.delete(callback);
+  },
+  /** 模拟一次点击，按捕获阶段的真实顺序调用所有监听器。 */
+  fireMousedown(target) {
+    for (const callback of [...(listeners.get('mousedown:capture') ?? [])]) callback({ target });
   },
 };
 
@@ -278,8 +301,8 @@ assert.match(source, /createElement\(\s*'textarea'/, 'rule editors use a multili
 assert.match(source, /dialog-fence-textarea/, 'the textarea carries its own class');
 assert.equal(
   (source.match(/createElement\('textarea'/g) ?? []).length,
-  4,
-  'four textareas: 1 rule editor + 3 new-rule boxes (panel common, panel session, settings page)',
+  5,
+  'five textareas: 1 rule editor + 4 new-rule boxes (panel common, panel session, settings common, settings session)',
 );
 // 唯一还该用单行 input 的地方是「围栏文件绝对路径」——路径含换行没有意义。
 assert.equal(
@@ -289,8 +312,8 @@ assert.equal(
 );
 assert.equal(
   (source.match(/createElement\('textarea'/g) ?? []).length,
-  4,
-  'four textareas: 1 rule editor + 3 new-rule boxes (panel common, panel session, settings page)',
+  5,
+  'five textareas: 1 rule editor + 4 new-rule boxes (panel common, panel session, settings common, settings session)',
 );
 // 多行框里 Enter 必须换行，提交改走 Ctrl/Cmd+Enter。
 assert.match(
@@ -302,6 +325,116 @@ assert.doesNotMatch(source, /if \(event\.key === 'Enter'\) commit\(\);/, 'bare E
 // 仍然没有「打开就变成长文本框」的老毛病：查看态是纯文本，只有点「改」才出编辑器。
 assert.match(source, /className: 'dialog-fence-text' \}, rule\.text/, 'idle rows stay plain text');
 assert.match(source, /if \(!editing\)/, 'the editor only appears while editing');
+
+// ---- 5.5) 设置页补上「专属规则」编辑区 + 会话下拉（显示名称，不显示 id）------
+// 缺陷（用户 CR-17 第 1 条）：设置页第三张卡过去只有两句说明文字，
+// 让用户「去右上角浮层里改」，两处界面不同步。现在两边共用同一份数据与同一套动作。
+assert.match(
+  source,
+  /function sessionLabelOf\(row, index\)/,
+  'a conversation gets a human label derived from its title',
+);
+assert.match(
+  source,
+  /return `未命名对话 \$\{index \+ 1\}`;/,
+  'a conversation without a title falls back to a readable name, never its id',
+);
+assert.match(
+  source,
+  /function currentSessionIdOf\(list\)/,
+  'the page can recognise the conversation being viewed',
+);
+assert.match(
+  source,
+  /retained\?\.mainView/,
+  'current conversation is detected by retainedBy.mainView, same rule as the workspace sidebar',
+);
+assert.match(
+  source,
+  /props\?\.useSessions/,
+  'the conversation names come from the slot standardProp useSessions',
+);
+assert.match(source, /className: 'dialog-fence-select'/, 'the picker is a <select>, so it cannot be mistaken for a text box');
+assert.match(
+  source,
+  /`\$\{choice\.label\}（当前）`/,
+  'the current conversation is marked in the picker',
+);
+assert.match(
+  source,
+  /act\(targetSession, 'add', \{ text \}\)/,
+  'the settings page posts per-conversation adds against the selected conversation',
+);
+assert.match(
+  source,
+  /act\(targetSession, 'update', \{ index: target, text \}\)/,
+  'per-conversation edits from the settings page go by index',
+);
+assert.match(
+  source,
+  /act\(targetSession, 'remove', \{ index: target \}\)/,
+  'per-conversation deletes from the settings page go by index',
+);
+assert.doesNotMatch(
+  source,
+  /点那个对话右上角的「围栏」按钮/,
+  'the read-only hint that pushed users to the overlay is gone',
+);
+
+// ---- 5.6) 浮层点外部自动关闭 ------------------------------------------------
+// 两个必须排除的落点：面板内部（否则改规则时自己就关了）与头部触发按钮
+// （否则 mousedown 先关、onClick 又按 isOpen=false 打开，面板永远关不掉）。
+assert.match(source, /addEventListener\('mousedown', onPointerDown, true\)/, 'an outside mousedown closes the panel');
+assert.match(
+  source,
+  /removeEventListener\('mousedown', onPointerDown, true\)/,
+  'the listener is removed on unmount, so it cannot leak',
+);
+assert.match(source, /target\.closest\('\.dialog-fence-panel'\) !== null\) return;/, 'clicks inside the panel do not close it');
+assert.match(
+  source,
+  /target\.closest\('\.dialog-fence-trigger'\) !== null\) return;/,
+  'clicks on the header trigger are left to its own onClick, otherwise the panel reopens immediately',
+);
+assert.match(source, /patch\(\{ openSessionId: null \}\)/, 'an outside click really closes the overlay');
+
+// ---- 5.7) 点外部关闭：真的触发一次 mousedown，看面板到底关没关 ---------------
+// 上面的正则只能证明「源码里有这行」；这里让假 React 真的跑 effect，
+// 再往 document 上打一次点击，验证四种落点的实际结果。
+function fakeTarget(...classes) {
+  const set = new Set(classes);
+  return {
+    closest(selector) {
+      const name = selector.replace(/^\./, '');
+      return set.has(name) ? { className: name } : null;
+    },
+  };
+}
+
+// 先打开面板：点头部按钮就是真实的开合入口。
+assert.equal(Panel(), null, 'panel starts closed');
+HeaderAction({ sessionId: 'session-x' }).props.onClick();
+const openTree = Panel();
+assert.notEqual(openTree, null, 'clicking the header button opens the panel');
+assert.equal(openTree.props.className, 'dialog-fence-panel');
+assert.equal((listeners.get('mousedown:capture') ?? new Set()).size, 1, 'an open panel watches the document once');
+
+// 点面板内部：不能关（否则一改规则就把自己关掉）。
+document.fireMousedown(fakeTarget('dialog-fence-panel'));
+assert.notEqual(Panel(), null, 'a click inside the panel leaves it open');
+// 点头部「围栏」按钮：交给它自己的 onClick，这里不能抢先关。
+document.fireMousedown(fakeTarget('dialog-fence-trigger'));
+assert.notEqual(Panel(), null, 'a click on the header trigger does not close it (its own onClick decides)');
+// 点无关的地方：必须关。
+document.fireMousedown(fakeTarget('some-unrelated-area'));
+assert.equal(Panel(), null, 'a click anywhere else closes the panel');
+// 关闭后监听器必须被摘掉，否则页面上留一个永不释放的 document 监听。
+effectCleanups.forEach((cleanup) => cleanup());
+assert.equal(
+  (listeners.get('mousedown:capture') ?? new Set()).size,
+  0,
+  'the document listener is removed on unmount',
+);
 
 // ---- 6) 复算 dsh-client-modules 的解析链（保证重启后真能被扫到）-------------
 // 参考 dsh-client-modules/lib/index.js：
