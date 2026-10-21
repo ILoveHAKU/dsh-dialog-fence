@@ -28,6 +28,7 @@
 - 文档与测试里的本机绝对路径统一改成占位符（`C:\Users\<你>`，URL 形态 `%3C你%3E`）。
 - 文档与代码注释里的内部对话编号（形如 `mNNNNN`）改成 **`CR-NN`**（按首次出现的时间顺序编号）。它们是正文里大量交叉引用的锚点（「已被 X 推翻」「见 5.5.7」），所以不能删空，只能换名。
 - 真实会话 id 改成占位符 `session-<uuid>`。
+- **扫描器的 `real-name` 规则第一版太窄，导致整个流程做了两遍**：它要求「名 + 姓」同时出现，放过了文档里只写裸名的一句话。第一轮重建转 public 之后，用一条更宽的独立检索复核才发现。修法是把规则放宽到只匹配名，并补一条匹配「姓-IT」形态；修完再做一次全历史重写与删库重建（16 个 commit 里只有引入该词的两个 commit 变了 SHA）。
 - `test/render.mjs` 不再写死本机安装路径，改用 `DSH_ASAR` / `DSH_INSTALL` 环境变量，默认值仍是 Windows 常见位置；找不到真 React 时 SKIP 并以 0 退出（这是 CI 能跑通的前提）。
 - README 补「开发与跑测试」一节；「与 billion-context 的关系」降级为**当时的选型理由**，并注明对方版本一变、行号级依据就可能失效。
 - 仓库转为 **public**，并给 `master` 配分支保护：Require status checks = `test`（strict）、禁止强推、禁止删分支、要求对话解决。
@@ -36,6 +37,8 @@
 
 - 五套测试本地全绿；CI（ubuntu + node 22）两次 `success`。
 - 从远端重新 clone 一遍再验：25 个跟踪文件、12 个 commit、9 个 tag、工作树与**全部历史**均 0 命中。本地干净不等于远端干净（`refs/original/`、未推的 tag 都会让假象成立）。
+- **第二轮（发现裸名之后）重建的复验读数**：16 个 commit / 9 个 tag / 25 个文件；worktree 与全部历史 0 命中；**commit message 0 命中**；旧 SHA 匿名取 `raw` 与 `.patch` 两条路径**全部 404**，而当前 HEAD 的 `raw` 是 200（排除「URL 拼错导致全 404」的假绿）；CI `success`。
+
 - 转 public 后做**匿名**复验：清空 `credential.helper` 仍能 clone，仓库页与 raw README 均 HTTP 200，API 报 `"private": false` —— 证明陌生访客真的能拿到。
 
 ### 发布事故与处置：force push 不会删掉旧 commit
@@ -47,6 +50,8 @@
 - **补救只能是删库重建**：GitHub 没有自助回收不可达对象的入口，force push 也不会触发回收。旧对象随旧仓库一起消失。
 - 之前「远端干净」的验证漏了一问：只验了「新 clone 的 worktree 与 master 历史 0 命中」，没验「旧 SHA 还在不在」。**验证「已清除」必须去取那个本该消失的东西。**
 - 重建后重新配置：description、8 个 topics、`has_discussions=true`（issue 表单的 contact_links 指向它，不开就是死链）、actions 权限、默认分支、master 分支保护。
+- **这件事做了两遍**：第一轮重建的仓库里仍留着一处裸名（扫描器规则漏的）。所以「删库重建」不是一个做完就结束的动作，它必须带一个复验闭环：**重建 → 转 public 前先验旧 SHA 是 404 → 用比扫描器更宽的检索再对撞一次 → 全部通过才发布**。
+
 
 ### 推送注意
 
