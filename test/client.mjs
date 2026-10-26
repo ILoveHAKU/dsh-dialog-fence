@@ -299,21 +299,19 @@ assert.match(source, /上一次启动资源管理器失败/, 'a deferred spawn f
 // 规则是成句成段的中文，单行 input 看不全也换不了行。
 assert.match(source, /createElement\(\s*'textarea'/, 'rule editors use a multiline textarea');
 assert.match(source, /dialog-fence-textarea/, 'the textarea carries its own class');
+// 浮层与设置页共用同一套卡片后，整个 bundle 里只剩一套「新建规则」框：
+// 1 个规则编辑器 + 2 个新建框（通用层、专属层）。过去是 5 个 ——
+// 因为浮层自己又抄了一份；两处 UI 必须同一份实现，数量下降正是统一的证据。
 assert.equal(
   (source.match(/createElement\('textarea'/g) ?? []).length,
-  5,
-  'five textareas: 1 rule editor + 4 new-rule boxes (panel common, panel session, settings common, settings session)',
+  3,
+  'three textareas: 1 rule editor + 2 new-rule boxes (common, session) — the overlay reuses the settings page',
 );
 // 唯一还该用单行 input 的地方是「围栏文件绝对路径」——路径含换行没有意义。
 assert.equal(
   (source.match(/className: 'dialog-fence-input'/g) ?? []).length,
   1,
   'the only remaining single-line input is the fence-file path box',
-);
-assert.equal(
-  (source.match(/createElement\('textarea'/g) ?? []).length,
-  5,
-  'five textareas: 1 rule editor + 4 new-rule boxes (panel common, panel session, settings common, settings session)',
 );
 // 多行框里 Enter 必须换行，提交改走 Ctrl/Cmd+Enter。
 assert.match(

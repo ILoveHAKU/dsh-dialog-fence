@@ -156,6 +156,41 @@ assert.match(
   'the settings page can now add a per-conversation rule (previously read-only text)',
 );
 
+// ---- 3.6) 浮层与设置页必须是同一套卡片（0.12.2 统一两处界面）---------------
+// 用户 CR-18：右上角「围栏」浮层过去是另一套实现，没有设置页里「针对单独对话
+// 的单独配置」（对话下拉 + 专属规则卡），两处长得也不一样。
+// 现在浮层直接渲染 FencePage —— 同一个组件、同一套卡片、同一个对话下拉，
+// 只额外套一层壳（标题 / 总开关状态 / 关闭）。下面渲染的正是浮层里那一份。
+const overlayCardsMarkup = renderToStaticMarkup(
+  React.createElement(FencePage, {
+    flat: true,
+    preferredSessionId: S1,
+    useSessions: useSessionsStub,
+  }),
+);
+console.log(`   overlay cards: ${overlayCardsMarkup.slice(0, 160)}…`);
+assert.match(overlayCardsMarkup, /class="dialog-fence-flat"/, 'the overlay renders the cards without page padding');
+assert.match(overlayCardsMarkup, /class="dialog-fence-card"/, 'the overlay reuses the settings-page cards');
+assert.match(overlayCardsMarkup, /class="dialog-fence-select"/, 'the overlay offers the same conversation picker');
+assert.match(overlayCardsMarkup, /围栏规则（对每个对话生效）/, 'the overlay shows the shared rule layer');
+assert.match(overlayCardsMarkup, /某个对话的额外规则（可选）/, 'the overlay carries the per-conversation card');
+assert.match(overlayCardsMarkup, /SQL 邮件提醒遗漏排查/, 'the overlay picker shows conversation names');
+assert.match(overlayCardsMarkup, /添加专属规则/, 'the overlay can add a per-conversation rule');
+assert.match(overlayCardsMarkup, /启用该对话|停用该对话/, 'the overlay can enable or disable the selected conversation');
+assert.match(overlayCardsMarkup, /打开文件夹/, 'the overlay keeps the open-folder action');
+assert.doesNotMatch(overlayCardsMarkup, /session-zzzzzzzz-yyyy-/, 'the overlay never shows a session id');
+assert.doesNotMatch(overlayCardsMarkup, /dialog-fence-foot/, 'the one-off footer is gone: its buttons live in the cards now');
+
+// 浮层要能定位到「点开它的那条对话」：preferredSessionId 优先于「当前对话」。
+const preferredMarkup = renderToStaticMarkup(
+  React.createElement(FencePage, { flat: true, preferredSessionId: S2, useSessions: useSessionsStub }),
+);
+assert.match(
+  preferredMarkup,
+  /<option[^>]*selected[^>]*>未命名对话 2</,
+  'the overlay preselects the conversation it was opened from, not the globally current one',
+);
+
 // ---- 4) 组合包详情页里的配置区（owner 只传 view: 'page'）---------------------
 const bundleMarkup = renderToStaticMarkup(React.createElement(BundleConfig, { view: 'page' }));
 assert.match(bundleMarkup, /class="dialog-fence-flat"/, 'bundle config renders the flat (no outer padding) variant');
