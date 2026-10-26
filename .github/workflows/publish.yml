@@ -20,6 +20,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      publish_ref:
+        description: '要发布的 tag（如 v0.12.0）。留空则用当前分支 HEAD —— 除非你确知 HEAD 就是该版本，否则请填。'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -30,7 +35,14 @@ jobs:
     name: publish
     runs-on: ubuntu-latest
     steps:
+      # 手动 dispatch 时必须允许指定 tag，否则 checkout 拿到的是分支 HEAD：
+      # 事故（0.12.0 真发生）：tag 打在 A 上，之后又推了几个 commit 再手动触发，
+      # 发出去的内容来自 HEAD 而不是 tag —— provenance 记 HEAD，而 v0.12.0 指向 A，
+      # 按 tag 重新打包会得到另一个 shasum，tag 从此失去溯源意义。
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.publish_ref || github.ref }}
+          fetch-depth: 0   # 需要完整历史才能校验 HEAD 就是 tag 指向的 commit
 
       # 注意：这里**故意不设 registry-url**。
       # setup-node 的 registry-url 会往 ~/.npmrc 写一行 `_authToken=${NODE_AUTH_TOKEN}`，
@@ -61,13 +73,26 @@ jobs:
           npm --version
 
       # tag 与 package.json 必须一致：registry 上的版本删不掉，发错就得改版本号。
-      # 手动 dispatch 时没有 tag（GITHUB_REF_NAME 是分支名），此时以 package.json 为准。
+      # 手动 dispatch 时没有 tag（GITHUB_REF_NAME 是分支名），此时以 package.json 为准，
+      # 但**必须**确认工作区就是那个 tag 指向的 commit（上面 checkout 已按 publish_ref 取）。
       - name: 校验 tag 与 package.json 版本一致
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "ref=$GITHUB_REF_NAME  ref_type=$GITHUB_REF_TYPE  package.json version=$VERSION"
           if [ "$GITHUB_REF_TYPE" != "tag" ]; then
             echo "manual dispatch: publishing package.json version $VERSION"
+            echo "checked-out commit: $(git rev-parse HEAD)"
+            if [ -z "${{ inputs.publish_ref }}" ]; then
+              echo "::warning::publish_ref not given; publishing the default ref. If a v$VERSION tag exists, re-run with publish_ref=v$VERSION so the tarball provably matches the tag."
+            else
+              EXPECTED=$(git rev-list -n 1 "${{ inputs.publish_ref }}")
+              ACTUAL=$(git rev-parse HEAD)
+              if [ "$EXPECTED" != "$ACTUAL" ]; then
+                echo "::error::checked-out commit $ACTUAL is not ${{ inputs.publish_ref }} ($EXPECTED)"
+                exit 1
+              fi
+              echo "checked out ${{ inputs.publish_ref }} -> $ACTUAL (matches)"
+            fi
             exit 0
           fi
           TAG="${GITHUB_REF_NAME#v}"
@@ -89,18 +114,35 @@ jobs:
           echo "GITHUB_REF_TYPE=$GITHUB_REF_TYPE GITHUB_REF_NAME=$GITHUB_REF_NAME"
           echo "repository=$GITHUB_REPOSITORY workflow=$GITHUB_WORKFLOW"
 
+      # 幂等：移动 tag 会重新触发本 workflow，而该版本已在 registry 上。
+      # 不查就发 → E403「cannot publish over the previously published versions」，
+      # 于是每次修正 tag 都会多一封失败邮件。已发布就跳过，不是失败。
+      - name: 该版本是否已发布
+        id: exists
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "dsh-dialog-fence@$VERSION" version --registry https://registry.npmjs.org > /dev/null 2>&1; then
+            echo "dsh-dialog-fence@$VERSION is already on the registry — nothing to publish"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "dsh-dialog-fence@$VERSION is not on the registry yet"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # OIDC：npm CLI 会自动检测 Actions 的 OIDC 环境并换取一次性凭据。
       # 先 pack 再 publish 这个 tgz，好处是「留档的那份」与「发上去的那份」字节一致。
       # 显式带 --registry：因为上面没有设 registry-url，这里必须点名目标 registry。
       # --loglevel verbose 是必须的：OIDC 交换失败的原因只写在 verbose 日志里
       # （`Failed token exchange request with body message: ...`），默认级别看不到。
       - name: 打包并发布到 npm（trusted publishing，无 token）
+        if: steps.exists.outputs.skip != 'true'
         run: |
           npm pack
           npm publish ./dsh-dialog-fence-*.tgz --access public --registry https://registry.npmjs.org --loglevel verbose
 
       # 发布后把 tarball 作为产物留档，便于核对 registry 上那一份是什么
       - name: 上传 tarball 留档
+        if: steps.exists.outputs.skip != 'true'
         uses: actions/upload-artifact@v6
         with:
           name: npm-tarball

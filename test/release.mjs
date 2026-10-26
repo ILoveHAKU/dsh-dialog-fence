@@ -125,8 +125,50 @@ assert.match(
   /GITHUB_REF_TYPE"?\s*!=\s*"?tag/,
   'manual dispatch (non-tag ref) skips the tag comparison instead of failing',
 );
+// ---- 8b) 手动 dispatch 必须能指定「从哪个 tag 发」，并在发布前把工作区对齐到它 ----
+// 事故（0.12.0 真发生）：tag 打在 A 上，之后又推了几个 commit，然后手动 dispatch。
+// 手动触发 checkout 的是分支 HEAD，于是「发出去的内容」不是 tag 指向的内容：
+//   provenance.resolvedDependencies -> ...@<HEAD>，而 v0.12.0 -> <A>
+// 后果是按 tag 重新打包得到另一个 shasum，tag 失去溯源意义。
+// 修法：dispatch 时允许传 publish_ref（tag），checkout 必须用它而不是默认 ref，
+// 并且发布前校验 HEAD 就是那个 tag。
+assert.match(
+  wfCode,
+  /publish_ref/,
+  'manual dispatch accepts publish_ref so a release can be built from a tag, not from branch HEAD',
+);
+assert.match(
+  wfCode,
+  /ref:\s*\$\{\{[^}]*publish_ref/,
+  'checkout uses publish_ref (otherwise a manual dispatch publishes the branch head)',
+);
+assert.match(
+  wfCode,
+  /git\s+rev-parse\s+HEAD|git\s+describe|rev-list\s+-n\s*1/,
+  'workflow verifies the checked-out commit really is the release tag before publishing',
+);
 
 // ---- 9) package.json 自身：可以被发布 ----
+// 9b) 重复执行不应把「版本已存在」当成故障。
+// 事故背景：移动一个 v* tag 会重新触发本 workflow；此时版本已在 registry 上，
+// `npm publish` 必然报 E403，于是每次修正 tag 都会多出一封失败邮件。
+// 因此发布前要先查「这个版本是否已发布」，已发布就跳过（而不是失败）。
+assert.match(
+  wfCode,
+  /npm view\b[^\n]*version/,
+  'workflow asks the registry whether the version already exists before publishing',
+);
+assert.match(
+  wfCode,
+  /skip[\s\S]{0,40}GITHUB_OUTPUT|GITHUB_OUTPUT[\s\S]{0,80}skip/,
+  'workflow records a skip decision in GITHUB_OUTPUT',
+);
+assert.match(
+  wfCode,
+  /if:\s*steps\.[A-Za-z0-9_-]+\.outputs\.[A-Za-z0-9_-]+\s*!=\s*['"]true['"]|if:\s*steps\.[A-Za-z0-9_-]+\.outputs\.[A-Za-z0-9_-]+\s*==\s*['"]false['"]/,
+  'the publish step is gated on that skip decision',
+);
+
 assert.equal(PKG.private, undefined, 'package.json is publishable (no "private": true)');
 assert.match(PKG.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, 'package.json version is a valid semver');
 assert.equal(PKG.repository.url, 'git+https://github.com/ILoveHAKU/dsh-dialog-fence.git', 'repository points at the listed repo (npm links the two)');
