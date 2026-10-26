@@ -46,12 +46,17 @@ jobs:
           npm install -g npm@latest
           npm --version
 
-      # tag 与 package.json 必须一致：registry 上的版本删不掉，发错就得改版本号
+      # tag 与 package.json 必须一致：registry 上的版本删不掉，发错就得改版本号。
+      # 手动 dispatch 时没有 tag（GITHUB_REF_NAME 是分支名），此时以 package.json 为准。
       - name: 校验 tag 与 package.json 版本一致
         run: |
           VERSION=$(node -p "require('./package.json').version")
+          echo "ref=$GITHUB_REF_NAME  ref_type=$GITHUB_REF_TYPE  package.json version=$VERSION"
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            echo "manual dispatch: publishing package.json version $VERSION"
+            exit 0
+          fi
           TAG="${GITHUB_REF_NAME#v}"
-          echo "tag=$GITHUB_REF_NAME  package.json version=$VERSION"
           if [ "$VERSION" != "$TAG" ]; then
             echo "::error::tag $GITHUB_REF_NAME does not match package.json version $VERSION"
             exit 1

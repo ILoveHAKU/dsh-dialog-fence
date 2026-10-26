@@ -67,6 +67,14 @@ assert.ok(testAt >= 0 && publishAt >= 0 && testAt < publishAt, 'tests run before
 // ---- 8) tag 必须与 package.json 的版本一致，否则会发出一个跟 tag 对不上的版本 ----
 assert.match(wf, /GITHUB_REF_NAME/, 'workflow compares the pushed tag with package.json version');
 assert.match(wf, /version/, 'workflow reads package.json version for the tag guard');
+// 手动 dispatch 时没有 tag（GITHUB_REF_NAME 是分支名），必须放行而不是报错，
+// 否则「推 tag」和「手动 Run workflow」这两条路只能走通一条。
+assert.match(wfCode, /GITHUB_REF_TYPE/, 'workflow tells a tag ref apart from a manual dispatch');
+assert.match(
+  wfCode,
+  /GITHUB_REF_TYPE"?\s*!=\s*"?tag/,
+  'manual dispatch (non-tag ref) skips the tag comparison instead of failing',
+);
 
 // ---- 9) package.json 自身：可以被发布 ----
 assert.equal(PKG.private, undefined, 'package.json is publishable (no "private": true)');
