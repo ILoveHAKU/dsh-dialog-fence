@@ -191,6 +191,32 @@ assert.match(
   'the overlay preselects the conversation it was opened from, not the globally current one',
 );
 
+// ---- 3.7) 对话选择器不能挤成一行（用户 CR-19）--------------------------------
+// 事故样子：`对话 [下拉 200~320px] [停用该对话] 1/40 条专属规则` 全塞进
+// `.dialog-fence-card-head`（一个 nowrap 的 flex 行）。浮层只有 476px 宽，
+// 下拉吃掉 320px 后，按钮和计数被压到各自只剩一个字宽，中文逐字换行成
+// 「停用该对 / 话」和「1/40 / 条专 / 属规 / 则」——看起来就是文字挤出去了。
+// 现在拆成两行：第一行「对话 + 下拉（flex:1，不再固定 max-width）」，
+// 第二行「停用/启用 + 计数」。按钮与计数一律 nowrap。
+assert.match(withSessionsMarkup, /class="dialog-fence-picker"/, 'the picker gets its own two-row block');
+assert.match(withSessionsMarkup, /class="dialog-fence-picker-row"/, 'the picker renders explicit rows instead of one crowded line');
+assert.equal(
+  (withSessionsMarkup.match(/class="dialog-fence-picker-row"/g) ?? []).length,
+  2,
+  'the picker is exactly two rows: the select, then the toggle plus the count',
+);
+assert.match(withSessionsMarkup, /class="dialog-fence-count"/, 'the rule count uses its own non-wrapping class');
+assert.doesNotMatch(
+  withSessionsMarkup,
+  /<span class="dialog-fence-meta" style="flex:1">\d+\/\d+ 条专属规则/,
+  'the count no longer rides inside an unrelated flex:1 meta span',
+);
+assert.match(
+  source,
+  /\.dialog-fence-select\{[^}]*flex:1/,
+  'the select grows to fill its row instead of keeping a fixed max-width',
+);
+
 // ---- 4) 组合包详情页里的配置区（owner 只传 view: 'page'）---------------------
 const bundleMarkup = renderToStaticMarkup(React.createElement(BundleConfig, { view: 'page' }));
 assert.match(bundleMarkup, /class="dialog-fence-flat"/, 'bundle config renders the flat (no outer padding) variant');

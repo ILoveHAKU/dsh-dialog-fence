@@ -8,6 +8,26 @@
 
 ---
 
+## 0.12.1 — 「某个对话的额外规则」卡片：按钮与计数不再挤成一行
+
+设置页（以及复用同一套卡片的浮层）里，「某个对话的额外规则（可选）」这张卡原本把
+`对话` 标签、下拉框、`停用该对话` 按钮、`N/40 条专属规则` 计数全塞在一个
+`display:flex; nowrap` 的单行里。下拉框写死了 `min-width:200px; max-width:320px`，
+在 476px 宽的浮层里吃掉大半宽度，剩下的空间不够，于是按钮被压成「停用该对 / 话」
+两行、计数被压成「1/40 / 条专 / 属规 / 则」四行。
+
+改成两行，且每一段都不许折行：
+
+- 第一行：`对话` 标签 + 下拉框（`flex:1; min-width:0`，宽度跟着卡片走，不再固定）；
+- 第二行：`停用/启用该对话` 按钮 + `N/40 条专属规则` 计数（两者 `flex:none; white-space:nowrap`）。
+
+新增 CSS 类 `.dialog-fence-picker` / `.dialog-fence-picker-row` / `.dialog-fence-count` /
+`.dialog-fence-label`。`test/render.mjs` 新增 3.7 组断言钉住这个形状（`.dialog-fence-picker`
+存在、`.dialog-fence-picker-row` 恰好 2 个、计数不再是 `style="flex:1"` 的 meta、
+下拉框 CSS 含 `flex:1`），先红后绿。
+
+---
+
 ## 未发布 — 发布链路：`v*` tag 触发 GitHub Actions 发 npm（无 token）
 
 新增 `.github/workflows/publish.yml`：推 `v*` tag（或手动 `Run workflow`）时，

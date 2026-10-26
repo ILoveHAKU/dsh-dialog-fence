@@ -306,9 +306,21 @@ window.__ModuleLoader__.load({
       'background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-secondary)}',
       '.dialog-fence-pill[data-on="true"]{background:var(--dsw-alias-brand-primary);color:#fff}',
       // 对话下拉：选项文本是对话名称（不是 sessionId），这里只保证它跟主题一致。
-      '.dialog-fence-select{min-width:200px;max-width:320px;height:28px;padding:0 8px;border-radius:7px;',
+      // 用户 CR-19：原先 `min-width:200px;max-width:320px` 让它在 476px 宽的浮层里
+      // 吃掉大半个卡片，同行的按钮与计数被挤到只剩一个字宽、中文逐字换行。
+      // 改为 flex:1 + min-width:0（可收缩），并把它单独放进一行。
+      '.dialog-fence-select{flex:1;min-width:0;height:28px;padding:0 8px;border-radius:7px;',
       'box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);',
       'background:var(--dsw-alias-bg-layer-1);color:inherit;font:inherit;font-size:13px}',
+      // 选择器区：两行（第一行「对话 + 下拉」，第二行「停用/启用 + 计数」）。
+      '.dialog-fence-picker{display:flex;flex-direction:column;gap:8px}',
+      '.dialog-fence-picker-row{display:flex;align-items:center;gap:10px;min-width:0}',
+      '.dialog-fence-picker-row > .dialog-fence-btn{flex:none;white-space:nowrap}',
+      // 计数与「对话」标签都是短文本，任何情况下都不许折行。
+      '.dialog-fence-count{flex:none;white-space:nowrap;color:var(--dsw-alias-label-tertiary);',
+      'font-size:12px;line-height:1.5}',
+      '.dialog-fence-label{flex:none;white-space:nowrap;color:var(--dsw-alias-label-tertiary);',
+      'font-size:12px;line-height:1.5}',
     ].join('');
 
     const TAG_ID = `${NS}/client.css`;
@@ -786,45 +798,55 @@ window.__ModuleLoader__.load({
               )
             : react.createElement(
                 'div',
-                { className: 'dialog-fence-card-head' },
-                react.createElement('span', { className: 'dialog-fence-meta' }, '对话'),
+                { className: 'dialog-fence-picker' },
+                // 第一行：标签 + 下拉。下拉 flex:1，宽度跟着卡片走，不再固定 320px。
                 react.createElement(
-                  'select',
-                  {
-                    className: 'dialog-fence-select',
-                    value: String(targetIndex < 0 ? '' : targetIndex),
-                    disabled: busy,
-                    onChange: (event) => {
-                      const next = choices[Number(event.target.value)];
-                      setPicked(next === undefined ? '' : next.id);
+                  'div',
+                  { className: 'dialog-fence-picker-row' },
+                  react.createElement('span', { className: 'dialog-fence-label' }, '对话'),
+                  react.createElement(
+                    'select',
+                    {
+                      className: 'dialog-fence-select',
+                      value: String(targetIndex < 0 ? '' : targetIndex),
+                      disabled: busy,
+                      onChange: (event) => {
+                        const next = choices[Number(event.target.value)];
+                        setPicked(next === undefined ? '' : next.id);
+                      },
                     },
-                  },
-                  choices.map((choice, choiceIndex) =>
-                    react.createElement(
-                      'option',
-                      { key: choice.id, value: String(choiceIndex) },
-                      choice.id === currentId ? `${choice.label}（当前）` : choice.label,
+                    choices.map((choice, choiceIndex) =>
+                      react.createElement(
+                        'option',
+                        { key: choice.id, value: String(choiceIndex) },
+                        choice.id === currentId ? `${choice.label}（当前）` : choice.label,
+                      ),
                     ),
                   ),
                 ),
-                // 只对这一个对话开关围栏（不影响别的对话）——浮层过去叫「停用本对话」，
-                // 设置页也必须有同一个动作，否则两边行为不一致。
-                targetSession === ''
-                  ? null
-                  : react.createElement(
-                      'button',
-                      {
-                        type: 'button',
-                        className: 'dialog-fence-btn',
-                        disabled: busy,
-                        onClick: () => act(targetSession, 'toggle', { enabled: !(targetEntry?.enabled === true) }),
-                      },
-                      targetEntry?.enabled === true ? '停用该对话' : '启用该对话',
-                    ),
+                // 第二行：只对这一个对话开关围栏（不影响别的对话）——浮层过去叫
+                // 「停用本对话」，设置页也必须有同一个动作，否则两边行为不一致。
+                // 计数放在这一行，且 nowrap —— 两者都不会再被下拉挤到换行。
                 react.createElement(
-                  'span',
-                  { className: 'dialog-fence-meta', style: { flex: 1 } },
-                  targetSession === '' ? '' : `${targetRules.length}/${targetEntry?.limits?.maxRules ?? 40} 条专属规则`,
+                  'div',
+                  { className: 'dialog-fence-picker-row' },
+                  targetSession === ''
+                    ? null
+                    : react.createElement(
+                        'button',
+                        {
+                          type: 'button',
+                          className: 'dialog-fence-btn',
+                          disabled: busy,
+                          onClick: () => act(targetSession, 'toggle', { enabled: !(targetEntry?.enabled === true) }),
+                        },
+                        targetEntry?.enabled === true ? '停用该对话' : '启用该对话',
+                      ),
+                  react.createElement(
+                    'span',
+                    { className: 'dialog-fence-count' },
+                    targetSession === '' ? '' : `${targetRules.length}/${targetEntry?.limits?.maxRules ?? 40} 条专属规则`,
+                  ),
                 ),
               ),
           targetSession === ''
