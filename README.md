@@ -422,6 +422,23 @@ workflow 会：校验 tag 与 `package.json` 版本一致 → `npm test` → `np
 `npm publish <那份 tgz>` → 把 tgz 作为 artifact 留档。**先把测试跑红再上 registry
 是不行的**：npm 上的版本除非在 72 小时内，否则删不掉。
 
+**一条硬规则：发版一定要推 tag，不要用手动 `Run workflow`。**
+
+手动触发 checkout 的是**分支 HEAD**，不是 tag。如果 tag 打在 A 上、之后又推了
+几个 commit 再手动触发，发出去的内容来自 HEAD 而不是 A —— 而 npm 的 provenance
+会如实记下那个 HEAD，于是「tag 指向的东西」和「npm 上那份」不是同一份：
+
+```bash
+npm provenance: resolvedDependencies -> ...@<分支 HEAD>
+git rev-list -n 1 v0.12.0            -> <tag 指向的 A>
+```
+
+后果很隐蔽：按 tag 重新打包会得到**另一个 shasum**，tag 从此证明不了发的是什么。
+0.12.0 就踩过这个坑，代码文件全都一样、只有两个文档不同，光看功能发现不了。
+
+确需手动重跑时，必须填 `publish_ref`（如 `v0.12.0`），workflow 会用
+`ref: inputs.publish_ref` 检出并校验 HEAD 就是该 tag；不填时只打一条 warning 放行。
+
 版本门槛（npm 官方文档原文）：
 
 > Trusted publishing requires npm CLI version 11.5.1 or later and Node version 22.14.0 or higher.

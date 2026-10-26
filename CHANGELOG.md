@@ -26,6 +26,17 @@
 被自己注释里那句「不需要 NPM_TOKEN」判红 —— 必须先剥注释再扫；②`npm test` 与
 `npm publish` 的先后比较两边必须用同一份「已剥注释」的文本，否则误报顺序错。
 
+后来真发 0.12.0 时又踩了两个，一并修掉（`test/release.mjs` 已加到 13 组断言）：
+
+- **手动触发会发出「不是 tag 那份」的内容**。`v0.12.0` 打在 `6ad7961`，之后又推了
+  3 个 commit 再手动触发，于是 checkout 拿到分支 HEAD，npm provenance 记的也是那个
+  HEAD，而 tag 还指着前一个 commit —— 按 tag 重新打包会得到另一个 shasum，tag 失去
+  溯源意义。修法：`workflow_dispatch` 增加 `publish_ref`，checkout 用它，并校验
+  HEAD 就是该 tag。**发版请推 tag，别用手动触发。**
+- **移动 tag 会重跑 workflow，而版本已在 registry 上**，`npm publish` 必然 E403，
+  于是「修正 tag」这种动作也会发失败通知。修法：先 `npm view <pkg>@<version> version`
+  判断是否已发布，已发布就整步跳过。
+
 一次性配置（只在 npmjs.com 网页上做一次）：包 → Settings → Trusted Publisher →
 GitHub Actions，Owner `ILoveHAKU` / Repository `dsh-dialog-fence` /
 Workflow `publish.yml`。填完两天内要完成首次发布，否则过期。
