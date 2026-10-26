@@ -162,4 +162,22 @@ assert.match(bundleMarkup, /class="dialog-fence-flat"/, 'bundle config renders t
 assert.match(bundleMarkup, /总开关/, 'bundle config carries the global switch');
 assert.match(bundleMarkup, /对话围栏/, 'bundle config shows the plugin title');
 
+// ---- 5) CSS 变量必须都在「当前这一版 DSH 的主题」里声明过 ---------------------
+// 主题 token 会随 DSH 版本改名/删除（0.12.1 就把 state-danger-primary 换成了
+// state-error-primary）。引用了不存在的 token，`var(--x, fallback)` 会静默退化成
+// fallback——不报错、不崩溃，只是不再跟随主题，最难发现。所以这里对着真主题做比对。
+const THEME_FILE = join(ASAR, '@deepseek-ai', 'dsh-client-ui-theme', 'lib', 'client.js');
+if (!existsSync(THEME_FILE)) {
+  console.log('   (theme bundle not found, skipping token check)');
+} else {
+  const themeSource = readFileSync(THEME_FILE, 'utf8');
+  const declared = new Set();
+  for (const match of themeSource.matchAll(/(--dsw-[a-z0-9-]+)\s*:/g)) declared.add(match[1]);
+  const used = new Set();
+  for (const match of source.matchAll(/--dsw-[a-z0-9-]+/g)) used.add(match[0]);
+  const missing = [...used].filter((token) => !declared.has(token)).sort();
+  console.log(`   theme tokens: ${declared.size} declared, ${used.size} used by client.js`);
+  assert.deepEqual(missing, [], `client.js references theme tokens the current DSH theme does not declare: ${missing.join(', ')}`);
+}
+
 console.log('OK all dialog-fence render assertions passed');

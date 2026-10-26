@@ -8,6 +8,81 @@
 
 ---
 
+## 0.11.1 — 适配 DSH Desktop 0.12.1（无功能改动）
+
+### 修复
+
+- **错误文字的颜色改用 0.12.1 仍在的主题 token**：`--dsw-alias-state-danger-primary` →
+  `--dsw-alias-state-error-primary`（`client.js`，只有这一行）。旧 token 在 0.12.1 的主题里已经不存在，
+  而写法是 `var(--x,#d33)`，所以它不会报错、只是**静默退化成硬编码红色**——不跟主题、深色模式下一眼能看出来。
+  用 `cordis_inspect` 的 `Theme.listTokens` 比对：0.12.1 声明 403 个 token，`client.js` 用到 13 个，只有这一个是坏的。
+
+### 变更
+
+- **兼容性声明从死字段挪到真正被读的字段**：删掉 `dsh.compatibility.dshReleases`（全 asar 0 命中，没有任何代码读它），
+  改在 `engines.dsh` 里声明 `">=0.2.0 <0.3.0"`。DSH 的判定函数是
+  `dsh-app-boot/lib/index.js:279 unmetRequirements()`：**只看 `engines.dsh`**，没有它才退回 `peerDependencies`。
+  之所以要写上界：0.x 期间次版本会带破坏性改动（本插件就踩到过主题 token 改名），下界放开、上界锁住次版本，
+  以后 0.3 发布时 DSH 会明确提示「不兼容」而不是静默加载后出现难查的样式问题。
+
+### 关于「版本不符合会怎样」（实测，不要误以为会被禁用）
+
+`dsh-app-boot/lib/index.js:2362 denial()` 调完 `evaluatePluginCompatibility()` 后
+**一律 `return void 0`**（只 `reportPluginCompatibility(issue)` 打一行 warning），
+只有 catch 到异常才返回字符串去 `deny()`。而 `:1064`（profile bundle 组装）同样只报 warning。
+所以 `engines.dsh` 写窄了**不会**让插件被 disable，只是打一行
+`[desktop] compatibility warning: ...`。真正会被 `row.disabled = true` 的只有「声明无法校验」这一种。
+
+### 验证
+
+五套测试全绿（`smoke` / `route` / `client` / `render` / `opensource`），在 0.12.1 上实跑。
+本轮新增两条断言，都是先让它变红再修：
+
+- `test/render.mjs` 第 5 组：读 asar 里 `dsh-client-ui-theme/lib/client.js` 的 token 声明集合，与 `client.js`
+  用到的 token 集合求差，要求为空。未修时报
+  `AssertionError: client.js references theme tokens the current DSH theme does not declare: --dsw-alias-state-danger-primary`。
+- `test/client.mjs` 第 7 组：要求 `engines.dsh` 非空、且 `dsh.compatibility` 不存在。把 `engines.dsh` 删掉、
+  死字段加回来时报 `AssertionError: engines.dsh is declared (the only field DSH reads)`。
+
+### 0.12.1 适配结论（除上面两点外全部兼容，逐项实测）
+
+- 五个客户端槽位全部存在且本插件注册项 `active`：`settings.section`、`settings.plugins.tab`、
+  `plugins.bundle.config`、`conversation.session.header.utilities`、`shell.overlay`。
+- 宿主 API 无破坏：`connection.fetch.register` / `assertFetchRoute` / `API_PATH` 都在；
+  `systemPrompt.context()` 签名不变（`text` 仍支持函数）；`commands.register()` 不变。
+- `CONTEXT_ORDER = 118` 仍有效：它落在 `APPROVAL_POLICY: 115` 与 `SUBAGENT_DELEGATION: 120` 之间，
+  而 `CONTEXT_ORDERS` 是给调用方参考的枚举表、**不是白名单**，`refreshContext()` 对任意数值 order 都接受。
+- `dsh-api-session-controller` 的 `byId[id]` 形状不变：`title` / `displayTitle` / `retainedBy` / `running` 都在
+  （`sessionTitle` 这个字段名在本版 **0 命中**，是旧结论，已作废）。本插件用 `title ?? displayTitle` 并挡掉
+  返回值等于 id 的情况，与 0.12.1 契约一致，无需改。
+
+### 注意
+
+- 改的是 `client.js`，**装过的 generation 快照里仍是旧代码**，必须重装 + 重启页面才生效。
+- 同环境下 `@deepseek-ai/dsh-subagent-codex@0.1.7-rc.2` 与 0.12.1 **确实不兼容**
+  （启动日志：`SyntaxError: The requested module '@deepseek-ai/dsh-subagent' does not provide an export named 'resolveChildCwd'`）。
+  那不是本插件的问题，但会出现在同一份启动日志里，排查时别误判。
+
+---
+
+## 0.11.0 — 上 npm，让「官方插件市场」能搜到
+
+### 变更
+
+- `package.json` 去掉 `"private": true`（发包前提），版本升到 0.11.0。
+- 新增 `assets/settings-page.png`、`assets/conversation-panel.png` 与 `screenshots.json`：
+  截图是用真 React + 真 `client.js` 组件 + 真主题 CSS 静态渲染后由 headless Chrome 截的，
+  不是手工拼的示意图；`screenshots.json` 是 DSH 插件市场认的截图清单格式。
+- `dsh-dialog-fence@0.11.0` 已发布到 npm 公共 registry（本仓库从 0.11.0 起同时支持
+  `dsh plugin --profile web add dsh-dialog-fence` 从 npm 装）。
+
+### 已知遗憾
+
+- registry 上有一个 `0.0.0-stage` 占位版本（npm 首次发布时自动创建的），本地 `npm unpublish`
+  被 403 拒绝（账号的 2FA 策略不允许绕过），已用 `npm deprecate` 标注，不影响 `latest`。
+
+---
+
 ## 0.10.0 — 设置页可以编辑「某个对话的专属规则」；浮层支持点外部关闭
 
 ### 新增

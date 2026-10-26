@@ -468,5 +468,13 @@ assert.ok(existsSync(join(PLUGIN_DIR, pkg.dsh.bundle.patch)), 'bundle patch file
 assert.equal(typeof pkg.description, 'string', 'package.json carries a description for the plugins page');
 assert.ok(pkg.description.length > 0, 'description is non-empty');
 
+// ---- 7) 兼容性声明必须是「DSH 真正会读的那个字段」-----------------------------
+// dsh-app-boot/lib/index.js:279 unmetRequirements()：只看 engines.dsh；没有它才退回
+// peerDependencies 里的 @deepseek-ai/dsh*。dsh.compatibility.dshReleases 在全 asar
+// 里 0 命中 —— 是死字段，写了也等于没写（0.12.1 实测）。
+assert.equal(typeof pkg.engines?.dsh, 'string', 'engines.dsh is declared (the only field DSH reads)');
+assert.ok(pkg.engines.dsh.trim().length > 0, 'engines.dsh is not empty');
+assert.equal(pkg.dsh?.compatibility, undefined, 'no dead dsh.compatibility.dshReleases field');
+
 console.log('OK all dialog-fence client bundle assertions passed');
 console.log(`   bundle: ${pathToFileURL(CLIENT_FILE).href}`);

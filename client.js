@@ -287,7 +287,7 @@ window.__ModuleLoader__.load({
       '.dialog-fence-editor{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}',
       '.dialog-fence-hint{color:var(--dsw-alias-label-tertiary);font-size:11px}',
       '.dialog-fence-meta{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5}',
-      '.dialog-fence-error{color:var(--dsw-alias-state-danger-primary,#d33);font-size:12px}',
+      '.dialog-fence-error{color:var(--dsw-alias-state-error-primary,#d33);font-size:12px}',
       '.dialog-fence-empty{color:var(--dsw-alias-label-tertiary);padding:6px 2px}',
       '.dialog-fence-dir{font-family:ui-monospace,monospace;font-size:11px;color:var(--dsw-alias-label-tertiary);',
       'word-break:break-all;line-height:1.5}',

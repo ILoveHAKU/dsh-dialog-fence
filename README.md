@@ -376,6 +376,25 @@ gh auth refresh -h github.com -s workflow
 - Windows 上 `explorer.exe /select,…` 的退出码**恒为 1**，不可用作成功判据；判定只能靠「窗口是否真的出现」。因此本插件对「已打开」的陈述是「已发出打开请求」而非「已确认窗口可见」。
 - 改位置时**不会覆盖已存在的目标文件**：若目标已存在，直接切换过去（以目标内容为准）。
 
+## 兼容性
+
+在 **DSH Desktop 0.12.1 / harness 0.2.1-rc.2** 上实测通过（五套测试全绿，插件在插件清单里
+`fiberPhase: active`）。逐项核对过的契约：
+
+| 依赖面 | 结论 |
+|---|---|
+| 五个客户端槽位（`settings.section` / `settings.plugins.tab` / `plugins.bundle.config` / `conversation.session.header.utilities` / `shell.overlay`） | 全部存在，本插件注册项 active |
+| `connection.fetch.register` / `systemPrompt.context()` / `commands.register()` | 签名未变（`text` 仍支持函数） |
+| `CONTEXT_ORDER = 118` | 仍有效（落在 `APPROVAL_POLICY:115` 与 `SUBAGENT_DELEGATION:120` 之间；`CONTEXT_ORDERS` 是参考枚举、不是白名单） |
+| `useSessions` 的 `byId[id]`（`title` / `displayTitle` / `retainedBy`） | 形状未变；`sessionTitle` 这个字段名在本版 0 命中 |
+
+`engines.dsh` 声明为 `">=0.2.0 <0.3.0"`：0.x 期间次版本会带破坏性改动（0.12.1 就改过一次主题 token 名），
+所以锁住次版本。注意**版本不符合不会禁用插件**——DSH 只打一行
+`[desktop] compatibility warning: ...`（`dsh-app-boot/lib/index.js:2362/1064` 两处都只 report），
+真正会 `row.disabled = true` 的只有「声明无法校验」那种异常。
+
+`dsh.compatibility.dshReleases` 是**死字段**（全 asar 0 命中，没有代码读它），别再用它声明兼容性。
+
 ## License
 
 MIT
