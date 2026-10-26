@@ -359,6 +359,29 @@ gh auth refresh -h github.com -s workflow
 - **发布前用一条比扫描器更宽的检索对撞一次。** 本仓库的 `test/opensource.mjs` 第一版 `real-name` 规则要求「名 + 姓」同时出现，于是文档里只写裸名的一句话被放过，整个发布流程（重写历史 → 重写 message → 删库重建 → 转 public → 配保护）因此做了两遍。规则与验证必须是两个独立实现、强度不同：扫描器越怕误报就越容易在「没想到的形态」上失守。放宽规则后记得做反向验证（造一个含敏感词的临时文件 → 确认变红 → 删掉 → 确认转绿），否则「规则太松」和「真的很干净」读数一样。
 
 
+## 上架清单（awesome-dsh-plugin / 插件市场）
+
+本插件已提交到社区清单 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)：
+[PR #9530](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/9530)，条目
+`data/plugins/ILoveHAKU__dsh-dialog-fence.yml`，分类 `dev`。
+
+收录后的市场可见性分两份目录，不要混：
+
+| 目录 | 来源 | 是否收 GitHub-only 条目 |
+|---|---|---|
+| `https://awesome-dsh-plugin.com/plugins.json` | 直接由 `data/plugins/*.yml` 生成 | **收** ⇒ 收录后 `dshmarket` 的「插件市场」能搜到 |
+| `https://awesome-dsh-plugin.com/index.json` | 由 `data/npm-map.json` + npm packument 生成 | 只收有 npm 包的条目（我们已发 `dsh-dialog-fence`，等 nightly probe 采集后进 index） |
+
+清单的硬门槛（都是 CI 自动查的，我们逐条实测过）：
+
+- **一个插件一个 YAML**，字段只允许 `url` / `name` / `category` / `description` / `icon` / `tarball`；两个 README 由脚本生成，**不要手改**（手改是「改到自己邻居条目」的常见事故源）。
+- `package.json` 必须有 **`dsh.bundle`**。只声明 `dsh.client` 的包会被判 `declares only dsh.client — that alone is not installable`，这是最常见的拒因。
+- 仓库要**满 1 天**（`MIN_AGE_DAYS = 1`），要有 `dsh-plugin` topic，描述必须属实（维护者会读源码核对，夸大是打回主因）。
+- 条目里的 `icon:` 只接受 **GitHub 托管的 png/jpg/jpeg/webp**（`ICON_HOSTS` 限定四个 GitHub 域），**SVG 会被拒**。所以 `package.json` 的 `icon: "./icon.svg"` 只对 DSH 自己的插件页有效，不能直接搬进清单条目；不写 `icon` 就回退作者头像。
+- `description` 里含 `": "`（冒号+空格）**必须加引号**，否则 YAML 解析失败。
+
+**踩过的坑（可复现）**：官方 gate `scripts/check-submission.mjs` 可以在本地先跑，但它 `import` 的 `scripts/lib/entries.mjs` 依赖 `js-yaml`。从 `%TEMP%` 直接跑会 `ERR_MODULE_NOT_FOUND`；解法是在临时目录放 `package.json`（`{"type":"module"}`）并把 `node_modules` 做成指向 `profiles/web/node_modules` 的 Junction，再带上 `GITHUB_TOKEN`（`gh auth token`）与代理。提交流程用 GitHub contents API 更省事：先 `POST /git/refs` 建分支（**PUT contents 不会自动建分支，会 404**），再 PUT 条目文件，最后 `gh pr create`。
+
 ## 文档
 
 - [设计与实施方案](docs/设计与实施方案.md) —— 方案、红线、源码级依据、被否决的替代路线

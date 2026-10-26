@@ -8,6 +8,21 @@
 
 ---
 
+## 未发布 — 文档：补充「上架社区清单」与踩坑
+
+无代码改动。README 新增「上架清单（awesome-dsh-plugin / 插件市场）」一节，运维手册新增
+「六、发布到社区清单」整章，把这次投稿实际撞到的规则与坑写下来：
+
+- 清单只收「一个插件一个 YAML」（`data/plugins/<owner>__<repo>.yml`），README 由脚本生成、手改会红。
+- 条目 `icon:` 只接受 GitHub 托管位图，**SVG 被拒**；`package.json` 的 `icon: "./icon.svg"` 只对 DSH 插件页有效。
+- 收录 ≠ 市场能搜到：`plugins.json` 收 GitHub-only 条目（收录后 dshmarket 就能搜到），`index.json` 只收已发 npm 的；后者靠 `probe-npm.mjs` 采集，条件是 registry 的 `repository` 指回本仓库。
+- 本地先跑官方 gate 需要 `GITHUB_TOKEN` + 代理 + 一个 `{"type":"module"}` 与 js-yaml 的临时环境。
+- 用 GitHub contents API 提 PR 时，**必须先 `POST /git/refs` 建分支**，否则 `PUT contents` 直接 404。
+
+收录 PR：[awesome-dsh-plugin#9530](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/9530)。
+
+---
+
 ## 0.12.0 — 浮层与设置页合成同一套界面（用户 CR）
 
 ### 修复
