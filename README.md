@@ -434,6 +434,34 @@ workflow 里钉 Node `24` 并 `npm install -g npm@latest`，就是为了稳过�
 会 401。这不是配置坏了，是**故意没有存长期 token**——走上面的 tag 流程即可。
 `npm publish --dry-run` 不校验凭据，所以它能过并不代表能发布。
 
+### 发布失败怎么查（两个最容易走错的坑）
+
+**坑 1：千万别给 `setup-node` 加 `registry-url`。** 它会往 `~/.npmrc` 写一行
+`_authToken=${NODE_AUTH_TOKEN}`，npm 看到有 token 就不再做 OIDC 交换，
+错误信息却是误导性的 `404 PUT https://registry.npmjs.org/<pkg>`。正确做法是
+不设 `registry-url`，在 `npm publish` 上显式带 `--registry`。
+
+**坑 2：`OIDC token exchange error - package not found` 不等于 npm 上没这个包。**
+当你看到：
+
+```
+npm http fetch POST 404 .../-/npm/v1/oidc/token/exchange/package/dsh-dialog-fence
+npm verbose oidc Failed token exchange request with body message:
+             OIDC token exchange error - package not found
+npm error code ENEEDAUTH
+```
+
+先看同一份日志里 `OIDC 环境自检` 那一步：如果
+`ACTIONS_ID_TOKEN_REQUEST_URL` 与 `..._TOKEN` 都是 `present`，说明 OIDC 链路没问题。
+这句话是 **registry 返回的**（CLI 只把响应体的 message 原样打印出来），
+
+**推断（未验证）**：它指「本仓库 + 本 workflow 没有为该包配置 Trusted Publisher」，
+而非「包不存在」——npm 对这两种情况复用同一 404，避免披露包的存在性。
+证伪方式：配好 Trusted Publisher 后重跑，404 若消失则假设成立。
+
+注意 Workflow 那一格填的是**文件名** `publish.yml`，不是 workflow 的 `name:`。
+`/-/package/<pkg>/trust` 接口未登录时返回 401，所以这件事只能在网页上核对。
+
 ## 文档
 
 - [设计与实施方案](docs/设计与实施方案.md) —— 方案、红线、源码级依据、被否决的替代路线
