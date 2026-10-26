@@ -48,6 +48,29 @@ assert.match(wf, /node-version:\s*['"]?(2[2-9]|[3-9]\d)(\.\d+)*['"]?/, 'workflow
 assert.doesNotMatch(wf, /node-version:\s*['"]?(1\d|2[01])(\.|['"]|\s)/, 'workflow does not pin Node below 22');
 assert.match(wf, /package-manager-cache:\s*false/, 'workflow disables the package-manager cache (release jobs must not restore a half state)');
 
+// ---- 4b) 官方 action 必须用不依赖 node20 的主版本 ----
+// GitHub 已弃用 node20 action：跑在 node24 上会出 annotation
+//   "Node.js 20 is deprecated. The following actions target Node.js 20..."
+// 而且 setup-node@v4 **没有** package-manager-cache 输入（v5 才加），
+// 写了会被当成未知输入静默忽略 —— CI 绿但配置其实没生效。
+const NODE24_ACTIONS = {
+  'actions/checkout': 5, // v5 起 using: node24
+  'actions/setup-node': 5, // v5 起 node24，且才支持 package-manager-cache
+  'actions/upload-artifact': 6, // v6 起 node24
+};
+for (const [action, minMajor] of Object.entries(NODE24_ACTIONS)) {
+  const pattern = new RegExp(`uses:\\s*${action.replace('/', '\\/')}@v(\\d+)`, 'g');
+  const uses = [...wfCode.matchAll(pattern)];
+  assert.ok(uses.length > 0, `workflow uses ${action}`);
+  for (const m of uses) {
+    const major = Number(m[1]);
+    assert.ok(
+      major >= minMajor,
+      `${action}@v${major} still targets node20; use v${minMajor}+ (node24) to avoid the deprecation annotation`,
+    );
+  }
+}
+
 // setup-node 的 registry-url 会往 .npmrc 里写一行 `_authToken=${NODE_AUTH_TOKEN}`，
 // 而 npm 一旦发现存在 _authToken 就会走 token 鉴权、不再做 OIDC 交换 —— trusted
 // publishing 直接失效（实测表现：`npm error 404 PUT https://registry.npmjs.org/...`，
