@@ -382,6 +382,58 @@ gh auth refresh -h github.com -s workflow
 
 **踩过的坑（可复现）**：官方 gate `scripts/check-submission.mjs` 可以在本地先跑，但它 `import` 的 `scripts/lib/entries.mjs` 依赖 `js-yaml`。从 `%TEMP%` 直接跑会 `ERR_MODULE_NOT_FOUND`；解法是在临时目录放 `package.json`（`{"type":"module"}`）并把 `node_modules` 做成指向 `profiles/web/node_modules` 的 Junction，再带上 `GITHUB_TOKEN`（`gh auth token`）与代理。提交流程用 GitHub contents API 更省事：先 `POST /git/refs` 建分支（**PUT contents 不会自动建分支，会 404**），再 PUT 条目文件，最后 `gh pr create`。
 
+## 发布到 npm
+
+打一个 `v*` tag 就会触发 [`.github/workflows/publish.yml`](.github/workflows/publish.yml)，
+也可以在该 workflow 上手动 `Run workflow`。
+
+**它不需要任何 token，也不需要在本机登录 npm。** 用的是 npm 的
+[trusted publishing](https://docs.npmjs.com/trusted-publishers)：GitHub Actions 用 OIDC
+身份向 registry 换取一次性凭据，所以仓库里没有任何 `NPM_TOKEN` / `_authToken`。
+`test/release.mjs` 会把这条红线钉住——workflow 里出现 `secrets.`、`NPM_TOKEN`
+或字面 `_authToken` 就直接红。
+
+### 一次性配置（只需一次，在 npmjs.com 网页上做，不碰本仓库）
+
+包 → Settings → **Trusted Publisher** → GitHub Actions，填：
+
+| 字段 | 值 |
+|---|---|
+| Organization or user | `ILoveHAKU` |
+| Repository | `dsh-dialog-fence` |
+| Workflow filename | `publish.yml` |
+| Environment | 留空 |
+
+填完的配置**两天内**必须完成第一次发布，否则会过期需要重配。
+
+### 发版步骤
+
+```bash
+# 1. 改 package.json 的 version，写 CHANGELOG
+# 2. 提交推送（CI 的 test job 会先跑一遍）
+git add -A && git commit -m "release: v0.12.0" && git push
+
+# 3. 打 tag 并推送 —— 这一步才真正发版
+git tag -a v0.12.0 -m "v0.12.0"
+git push origin v0.12.0
+```
+
+workflow 会：校验 tag 与 `package.json` 版本一致 → `npm test` → `npm pack` →
+`npm publish <那份 tgz>` → 把 tgz 作为 artifact 留档。**先把测试跑红再上 registry
+是不行的**：npm 上的版本除非在 72 小时内，否则删不掉。
+
+版本门槛（npm 官方文档原文）：
+
+> Trusted publishing requires npm CLI version 11.5.1 or later and Node version 22.14.0 or higher.
+
+workflow 里钉 Node `24` 并 `npm install -g npm@latest`，就是为了稳过这条线。
+
+### 本机没有凭据时不要硬发
+
+`~/.npmrc` 里如果只是 `//registry.npmjs.org/:_authToken=`（空值），本机 `npm publish`
+会 401。这不是配置坏了，是**故意没有存长期 token**——走上面的 tag 流程即可。
+`npm publish --dry-run` 不校验凭据，所以它能过并不代表能发布。
+
 ## 文档
 
 - [设计与实施方案](docs/设计与实施方案.md) —— 方案、红线、源码级依据、被否决的替代路线

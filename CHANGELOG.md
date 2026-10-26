@@ -8,6 +8,30 @@
 
 ---
 
+## 未发布 — 发布链路：`v*` tag 触发 GitHub Actions 发 npm（无 token）
+
+新增 `.github/workflows/publish.yml`：推 `v*` tag（或手动 `Run workflow`）时，
+校验 tag 与 `package.json` 版本一致 → `npm test` → `npm pack` → 发布那份 tgz →
+上传 tgz 留档。
+
+用的是 npm **trusted publishing**（GitHub Actions OIDC 换一次性凭据），
+所以仓库里**没有任何 `NPM_TOKEN` / `_authToken`**，本机也不需要 `npm login`。
+
+新增 `test/release.mjs`（纯静态断言，零依赖）把红线钉住：workflow 里出现
+`secrets.` / `NPM_TOKEN` / `NODE_AUTH_TOKEN` 就红；`npm test` 必须排在
+`npm publish` 之前；`permissions` 必须有 `id-token: write`；`package.json`
+不得有 `private`、`files` 不得把用户的 `fence.json` 打进包里。
+
+写这个测试时踩了两个坑，都记在运维手册 7.5：①第一版直接扫整个 workflow 文本，
+被自己注释里那句「不需要 NPM_TOKEN」判红 —— 必须先剥注释再扫；②`npm test` 与
+`npm publish` 的先后比较两边必须用同一份「已剥注释」的文本，否则误报顺序错。
+
+一次性配置（只在 npmjs.com 网页上做一次）：包 → Settings → Trusted Publisher →
+GitHub Actions，Owner `ILoveHAKU` / Repository `dsh-dialog-fence` /
+Workflow `publish.yml`。填完两天内要完成首次发布，否则过期。
+
+---
+
 ## 未发布 — 文档：补充「上架社区清单」与踩坑
 
 无代码改动。README 新增「上架清单（awesome-dsh-plugin / 插件市场）」一节，运维手册新增

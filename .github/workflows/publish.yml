@@ -1,0 +1,77 @@
+name: publish
+
+# 发 npm 的唯一路径：推一个 v* tag，或者手动触发。
+#
+# 为什么不在本机 `npm publish`：那需要一个长期存活的 token，一旦泄漏就要吊销、
+# 而且换台机器就发布不了。这个 workflow 用 GitHub Actions 的 OIDC 身份直接跟
+# registry 换取一次性凭据（trusted publishing），所以仓库里**不存任何 token**。
+#
+# 前置（只需在 npmjs.com 上做一次，不在本仓库里）：
+#   npmjs.com -> 包 -> Settings -> Trusted Publisher -> GitHub Actions
+#   填 Owner=ILoveHAKU  Repository=dsh-dialog-fence  Workflow=publish.yml
+# 做完之后本文件里的 npm publish 就会通过，不需要 NPM_TOKEN。
+#
+# 版本门槛（npm 官方文档 https://docs.npmjs.com/trusted-publishers）：
+#   "Trusted publishing requires npm CLI version 11.5.1 or later and Node version 22.14.0 or higher."
+# 因此下面把 Node 钉在 24，并显式升到最新 npm。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # OIDC 换 token 的必要条件，缺了会 401
+
+jobs:
+  publish:
+    name: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false   # 发布任务不恢复缓存，避免拿到半截状态
+
+      # setup-node 自带的那份 npm 不一定够新；trusted publishing 要求 >= 11.5.1
+      - name: 升级 npm（trusted publishing 需要 >= 11.5.1）
+        run: |
+          node --version
+          npm --version
+          npm install -g npm@latest
+          npm --version
+
+      # tag 与 package.json 必须一致：registry 上的版本删不掉，发错就得改版本号
+      - name: 校验 tag 与 package.json 版本一致
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "tag=$GITHUB_REF_NAME  package.json version=$VERSION"
+          if [ "$VERSION" != "$TAG" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $VERSION"
+            exit 1
+          fi
+
+      # 先跑测试：红灯版本不能上 registry
+      - name: 跑测试
+        run: npm test
+
+      # OIDC：npm CLI 会自动检测 Actions 的 OIDC 环境并换取一次性凭据。
+      # 先 pack 再 publish 这个 tgz，好处是「留档的那份」与「发上去的那份」字节一致。
+      - name: 打包并发布到 npm（trusted publishing，无 token）
+        run: |
+          npm pack
+          npm publish ./dsh-dialog-fence-*.tgz --access public
+
+      # 发布后把 tarball 作为产物留档，便于核对 registry 上那一份是什么
+      - name: 上传 tarball 留档
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarball
+          path: '*.tgz'
+          if-no-files-found: error
