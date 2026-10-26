@@ -8,6 +8,24 @@
 
 ---
 
+## 0.12.2 — 确立「改完就发 npm，两边不留版本差」的规则
+
+无代码改动，只补文档与规则。起因是一次真实的不同步：0.12.0 发到 npm 后，仓库又推了
+0.12.1（CR-19 的按钮挤行修复）却没打 tag，于是仓库 0.12.1 / npm 0.12.0 ——
+按 README 用 `npm i dsh-dialog-fence` 装到的人拿到的是没修 UI 的那个版本。
+
+- README「发布到 npm」新增小节「长期规则：改完就发，两边不留版本差」，给出三条核对命令
+  （`git describe --tags --abbrev=0` / `node -p "require('./package.json').version"` /
+  `npm view dsh-dialog-fence version`）。
+- 运维手册新增 §7.2.1，写清执行口径：升版本 + 写 CHANGELOG → 提交推送 → 打 `v*` tag 推送，
+  一件都不能省；仓库领先 npm 时补推 tag 即可，不必重新提交代码。
+- CHANGELOG 里两条旧条目原本标「未发布」，实际早已随 0.12.0 发出（`3aec000` / `e9e4fc1`
+  都是 `v0.12.0` 的祖先），改成「0.12.0 起可用」以免下一个人误以为漏发。
+
+0.12.1 本身也已补发到 npm（此前只推了代码没发版），这一步正是本规则要防的情况。
+
+---
+
 ## 0.12.1 — 「某个对话的额外规则」卡片：按钮与计数不再挤成一行
 
 设置页（以及复用同一套卡片的浮层）里，「某个对话的额外规则（可选）」这张卡原本把
@@ -28,7 +46,7 @@
 
 ---
 
-## 未发布 — 发布链路：`v*` tag 触发 GitHub Actions 发 npm（无 token）
+## 0.12.0 起可用 — 发布链路：`v*` tag 触发 GitHub Actions 发 npm（无 token）
 
 新增 `.github/workflows/publish.yml`：推 `v*` tag（或手动 `Run workflow`）时，
 校验 tag 与 `package.json` 版本一致 → `npm test` → `npm pack` → 发布那份 tgz →
@@ -63,7 +81,7 @@ Workflow `publish.yml`。填完两天内要完成首次发布，否则过期。
 
 ---
 
-## 未发布 — 文档：补充「上架社区清单」与踩坑
+## 0.12.0 起可用 — 文档：补充「上架社区清单」与踩坑
 
 无代码改动。README 新增「上架清单（awesome-dsh-plugin / 插件市场）」一节，运维手册新增
 「六、发布到社区清单」整章，把这次投稿实际撞到的规则与坑写下来：

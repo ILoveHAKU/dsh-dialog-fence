@@ -393,6 +393,26 @@ gh auth refresh -h github.com -s workflow
 `test/release.mjs` 会把这条红线钉住——workflow 里出现 `secrets.`、`NPM_TOKEN`
 或字面 `_authToken` 就直接红。
 
+### 长期规则：改完就发，两边不留版本差
+
+**每一次改动，只要升了 `package.json` 的版本并推送到 GitHub，就必须同时推到 npm。**
+仓库和 npm 上的版本号不允许长期不一致——两边对不上时，「装哪个才是最新的」这个问题
+没有正确答案，用户按 README 走 `npm i` 会拿到缺功能的旧版。
+
+发版是三件事，一件都不能省：**升版本 + 写 CHANGELOG → 提交推送 → 打 tag 推送**。
+只做完前两步不算发版，npm 上不会有任何变化。
+
+核对两边是否同步（不需要凭据）：
+
+```bash
+git describe --tags --abbrev=0                 # 仓库最新的 tag
+node -p "require('./package.json').version"    # 仓库版本
+npm view dsh-dialog-fence version              # registry 上的 latest
+```
+
+三条一致才算同步。若仓库领先于 npm（常见于「改完先提交、稍后才打 tag」），
+补推对应 tag 即可，不需要重新提交代码。
+
 ### 一次性配置（只需一次，在 npmjs.com 网页上做，不碰本仓库）
 
 包 → Settings → **Trusted Publisher** → GitHub Actions，填：
