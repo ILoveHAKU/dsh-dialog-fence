@@ -455,12 +455,19 @@ npm error code ENEEDAUTH
 `ACTIONS_ID_TOKEN_REQUEST_URL` 与 `..._TOKEN` 都是 `present`，说明 OIDC 链路没问题。
 这句话是 **registry 返回的**（CLI 只把响应体的 message 原样打印出来），
 
-**推断（未验证）**：它指「本仓库 + 本 workflow 没有为该包配置 Trusted Publisher」，
-而非「包不存在」——npm 对这两种情况复用同一 404，避免披露包的存在性。
-证伪方式：配好 Trusted Publisher 后重跑，404 若消失则假设成立。
+**它指的是「本仓库 + 本 workflow 没有为该包配置 Trusted Publisher」，而非「包不存在」。**
+这一点做过对照实验：唯一变量是那个网页配置，配之前
+`POST .../token/exchange/...` 返回 404 + `ENEEDAUTH`，配之后返回 **201** +
+`Successfully retrieved and set token`，随后 `PUT` 202 发布成功。
+包在两次之间都一直在 registry 上。
 
 注意 Workflow 那一格填的是**文件名** `publish.yml`，不是 workflow 的 `name:`。
 `/-/package/<pkg>/trust` 接口未登录时返回 401，所以这件事只能在网页上核对。
+配好后页面显示 `Pending validation` 是正常中间态，首次发布成功才转正。
+
+读日志要读到**最后一行**：`npm notice` 的 tarball 清单很长，真正的结果是末尾的
+`npm info ok`。发布成功后 registry 读缓存还有几分钟延迟，直接查 `dist-tags` 仍是
+旧版本，加 `?ts=<时间戳>` 破缓存才能看到新版本。
 
 ## 文档
 
