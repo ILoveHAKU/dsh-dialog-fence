@@ -80,13 +80,24 @@ jobs:
       - name: 跑测试
         run: npm test
 
+      # OIDC 自检：只打印「有没有」，绝不打印令牌本身。
+      # 这两个变量存在 = id-token: write 已生效；缺失 = 权限没给对。
+      - name: OIDC 环境自检（只报存在性，不打印令牌）
+        run: |
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL: ${ACTIONS_ID_TOKEN_REQUEST_URL:+present}${ACTIONS_ID_TOKEN_REQUEST_URL:-MISSING}"
+          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+present}${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-MISSING}"
+          echo "GITHUB_REF_TYPE=$GITHUB_REF_TYPE GITHUB_REF_NAME=$GITHUB_REF_NAME"
+          echo "repository=$GITHUB_REPOSITORY workflow=$GITHUB_WORKFLOW"
+
       # OIDC：npm CLI 会自动检测 Actions 的 OIDC 环境并换取一次性凭据。
       # 先 pack 再 publish 这个 tgz，好处是「留档的那份」与「发上去的那份」字节一致。
       # 显式带 --registry：因为上面没有设 registry-url，这里必须点名目标 registry。
+      # --loglevel verbose 是必须的：OIDC 交换失败的原因只写在 verbose 日志里
+      # （`Failed token exchange request with body message: ...`），默认级别看不到。
       - name: 打包并发布到 npm（trusted publishing，无 token）
         run: |
           npm pack
-          npm publish ./dsh-dialog-fence-*.tgz --access public --registry https://registry.npmjs.org
+          npm publish ./dsh-dialog-fence-*.tgz --access public --registry https://registry.npmjs.org --loglevel verbose
 
       # 发布后把 tarball 作为产物留档，便于核对 registry 上那一份是什么
       - name: 上传 tarball 留档
