@@ -46,8 +46,26 @@ assert.match(wf, /contents:\s*read/, 'publish workflow restricts contents to rea
 // ---- 4) 版本门槛：低于这个版本 npm CLI 不会做 OIDC 交换 ----
 assert.match(wf, /node-version:\s*['"]?(2[2-9]|[3-9]\d)(\.\d+)*['"]?/, 'workflow pins Node >= 22 (trusted publishing needs >= 22.14.0)');
 assert.doesNotMatch(wf, /node-version:\s*['"]?(1\d|2[01])(\.|['"]|\s)/, 'workflow does not pin Node below 22');
-assert.match(wf, /registry-url:\s*['"]?https:\/\/registry\.npmjs\.org\/?['"]?/, 'workflow sets the public registry');
 assert.match(wf, /package-manager-cache:\s*false/, 'workflow disables the package-manager cache (release jobs must not restore a half state)');
+
+// setup-node 的 registry-url 会往 .npmrc 里写一行 `_authToken=${NODE_AUTH_TOKEN}`，
+// 而 npm 一旦发现存在 _authToken 就会走 token 鉴权、不再做 OIDC 交换 —— trusted
+// publishing 直接失效（实测表现：`npm error 404 PUT https://registry.npmjs.org/...`，
+// 这个 404 还会掩盖「Trusted Publisher 根本没配」的真实原因）。
+// 所以这条是**反向**断言：绝不能设 registry-url。
+assert.doesNotMatch(
+  wfCode,
+  /registry-url:/,
+  'workflow must not set setup-node registry-url (it injects NODE_AUTH_TOKEN and defeats trusted publishing)',
+);
+// 既然不靠 registry-url，就必须在 publish 时显式指定 registry，否则发到默认之外的地方
+assert.match(
+  wfCode,
+  /npm publish\b[^\n]*--registry\s+https:\/\/registry\.npmjs\.org/,
+  'npm publish explicitly targets the public registry',
+);
+// 保险：即使运行器里残留了 NODE_AUTH_TOKEN / .npmrc，也要在发布前清掉
+assert.match(wfCode, /NODE_AUTH_TOKEN/, 'workflow defensively unsets NODE_AUTH_TOKEN before publishing');
 
 // ---- 5) 真的会执行 publish ----
 assert.match(wfCode, /\bnpm publish\b/, 'workflow runs npm publish');
@@ -55,8 +73,17 @@ assert.match(wfCode, /\bnpm publish\b/, 'workflow runs npm publish');
 // ---- 6) 关键红线：仓库里不得出现任何 npm 凭据 ----
 // trusted publishing 的全部意义就是不用存 token；一旦出现 secret 引用就说明有人退回了老路。
 assert.doesNotMatch(wfCode, /secrets\./, 'publish workflow references no repository secret at all');
-assert.doesNotMatch(wfCode, /NPM_TOKEN|NODE_AUTH_TOKEN/, 'publish workflow has no NPM_TOKEN / NODE_AUTH_TOKEN reference');
 assert.doesNotMatch(wfCode, /_authToken\s*=\s*\S/, 'publish workflow writes no literal _authToken');
+// NODE_AUTH_TOKEN 只允许出现在「主动清除」的语句里（unset / 判断是否为空），
+// 不允许被当成凭据赋值或透传。红线针对的是「把 token 当凭据用」，不是「提到这个名字」。
+for (const line of wfCode.split('\n')) {
+  if (!/NODE_AUTH_TOKEN/.test(line)) continue;
+  assert.match(
+    line,
+    /^\s*(?:unset\s+NODE_AUTH_TOKEN|echo\s+["']?NODE_AUTH_TOKEN)/,
+    `NODE_AUTH_TOKEN may only be unset or probed for emptiness, got: ${line.trim()}`,
+  );
+}
 
 // ---- 7) 发版前必须先跑测试：避免把红灯版本推上 registry（registry 上的版本删不掉） ----
 assert.match(wfCode, /\bnpm test\b/, 'publish workflow runs the test suite before publishing');
