@@ -1,10 +1,43 @@
-# 变更记录（CHANGELOG）
+# 变更记录（CHANGELOG）/ Change log
 
 本文件按版本记录**用户可见的**改动。逐条的设计理由、源码级依据、被否决的替代路线写在
 [`docs/设计与实施方案.md`](docs/设计与实施方案.md)，踩过的坑与排查步骤写在
 [`docs/运维手册与变更记录.md`](docs/运维手册与变更记录.md)。
+This file records **user-visible** changes per version. The reasoning behind each decision, the
+source-level evidence and the rejected alternatives live in
+[`docs/设计与实施方案.md`](docs/设计与实施方案.md); the traps and troubleshooting steps live in
+[`docs/运维手册与变更记录.md`](docs/运维手册与变更记录.md).
 
 版本号从 `0.2.0` 起打 tag；`0.1.0` 是首次落地，从未单独提交过。
+Versions are tagged from `0.2.0` on; `0.1.0` was the first drop and was never committed on its own.
+
+---
+
+## 0.12.3 — 对外介绍改为中英双语、中文优先
+
+无功能改动，只改对外文案与新增一条测试。
+
+- `README.md`：开头摘要改为中文四行 + 英文四行（中文在前）；所有标题（含本次新增的小节，现共 28 个）全部改成「中文 / English」并列；
+  新增 `## 英文概览 / English overview` 一节，用英文把「是什么 / 为什么不写进系统提示词 / 本插件怎么做 /
+  在哪编辑 / 怎么装 / 有哪些测试 / 文档在哪」讲完，让只读英文的人不必先读中文。
+- `package.json` 的 `description`：改为中文优先的中英双语。这个字段同时喂给三处——DSH 插件页的卡片
+  标题与描述、npm 页面、以及社区清单条目，所以中文放前面。
+- `.github/SECURITY.md`、`.github/pull_request_template.md`、`.github/ISSUE_TEMPLATE/*.yml`：
+  逐条补英文，中文句在前、英文句紧跟其后。
+- 顺带修掉一处**过时的事实**：`SECURITY.md` 原来写「只维护 `dsh.compatibility.dshReleases` 声明过的
+  DSH 版本」，而那个字段在 0.12.1 已确认是死字段（全 asar 零命中），真正被读的是 `engines.dsh`。
+- 新增 `test/docs.mjs`：机器检查「中文优先」这条路没有被悄悄退回去。它钉住的是**结构**，不是文笔：
+  `package.json` 的 `description` 必须中英文都有且中文先出现；README 的每个一/二/三级标题必须中英并列；
+  开头摘要中英文块引用各至少三行且中文在前；存在英文概览小节；`.github` 下四个对外文件各自中英兼备。
+- `docs/设计与实施方案.md` 与 `docs/运维手册与变更记录.md`：**只改入口层**——一级标题、全部二级章标题、
+  开头摘要块补上英文并列；正文保持中文（这是内部工程记录，做成双语对照本收益远小于维护成本）。
+- `npm test` 从六套变七套（新增 `docs`），`npm run test:docs` 可单跑。
+
+先红后绿：改之前 `test/docs.mjs` 报 23 处（`package.json` 缺中文、19 个标题缺英文、开头没有英文摘要、
+没有英文概览小节），改完 `OK all docs assertions passed（27 个标题中英并列，8 段摘要分中英）`；随后补入「仓库 About 与逐条文案的双语规则」小节，标题变 28 个。
+
+仓库 About（右侧那句描述）不在仓库里，靠 `gh api -X PATCH repos/... -f description=...` 改，
+测试管不到——这一点写进了 README 的「上架清单」。
 
 ---
 

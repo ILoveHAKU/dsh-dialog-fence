@@ -1,5 +1,5 @@
-name: 功能请求
-description: 想要新的能力，或现有行为需要调整
+name: 功能请求 / Feature request
+description: 想要新的能力，或现有行为需要调整 · a new capability, or an existing behavior that should change
 labels: ["enhancement"]
 body:
   - type: markdown
@@ -9,33 +9,37 @@ body:
         1. 绝不注册 / 修改系统提示词段（前缀缓存不能破）；
         2. 只做纯 append，不重写历史前缀；
         3. 规则文本不变时一条消息都不追加（零 token）。
+        Start from the problem, not the feature. Three hard constraints get most requests rejected:
+        1. never register or modify the system-prompt section (the prefix cache must hold);
+        2. append only, never rewrite a history prefix;
+        3. append nothing at all while the rendered rule text is unchanged (zero tokens).
 
   - type: textarea
     id: problem
     attributes:
-      label: 你想解决的问题
-      description: 现在怎么做、卡在哪。不要只写「希望支持 X」。
+      label: 你想解决的问题 / The problem you want solved
+      description: 现在怎么做、卡在哪。不要只写「希望支持 X」。/ How you do it today and where it hurts. "Please support X" alone is not a problem statement.
     validations:
       required: true
 
   - type: textarea
     id: proposal
     attributes:
-      label: 你设想的方案
+      label: 你设想的方案 / Your proposed approach
     validations:
       required: true
 
   - type: textarea
     id: alternatives
     attributes:
-      label: 考虑过的替代方案
+      label: 考虑过的替代方案 / Alternatives you considered
     validations:
       required: false
 
   - type: checkboxes
     id: constraints
     attributes:
-      label: 约束自检
+      label: 约束自检 / Constraint check
       options:
-        - label: 这个需求不需要改动系统提示词
-        - label: 这个需求不会让每轮都重复注入同样的内容
+        - label: 这个需求不需要改动系统提示词 / this does not need a change to the system prompt
+        - label: 这个需求不会让每轮都重复注入同样的内容 / this does not re-inject the same text every turn

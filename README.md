@@ -1,20 +1,68 @@
-# dsh-dialog-fence
+# dsh-dialog-fence / 对话围栏
 
 > 给 DSH（DeepSeek Harness）的每一次对话设定**边界与围栏**：一套随时增删、下一轮即生效的行为约束规则。
 > 全部规则存在**一个 JSON 文件**里——用任何编辑器直接改 JSON，或者直接在设置页里逐条编辑。
 > 文件放在哪可以自己定，设置页一键「打开文件夹」就能看到它。
 > 不破坏前缀缓存 · 不膨胀上下文 · 不影响其它对话 · 与 billion-context 压缩共存。
 
-两层规则，叠加注入：
+> Set the **bounds and fence** of every DSH (DeepSeek Harness) conversation: one list of behavioral rules you can add or drop at any time, effective from the next turn.
+> Everything lives in **one JSON file** — edit the JSON in any editor, or edit rule by rule on the Settings page.
+> The file can live wherever you want; one click on "Open folder" in Settings shows it to you.
+> Breaking no prefix cache · inflating no context · touching no other conversation · coexisting with billion-context compaction.
+
+两层规则，叠加注入（Two layers, injected on top of each other）：
 
 - **通用规则**（`fence.json` 里的 `rules` 数组）—— 对**每一个**对话都生效，包括新开的对话。设置页里主要就是编辑这一层。
 - **会话规则**（`fence.json` 里的 `sessions.<会话 id>.rules`）—— 只叠加到某一个对话，可选，通常在会话右上角的「围栏」浮层里维护。
 
+- **Shared rules** (the `rules` array in `fence.json`) — apply to **every** conversation, including new ones. This is the layer the Settings page is mostly about.
+- **Session rules** (the `sessions.<session id>.rules` map in `fence.json`) — opt-in, stacked onto one conversation only; usually maintained from the fence panel in the conversation's top-right corner.
+
 适用形态：**`dsh` CLI（web / headless / acp 等 profile）** 与 **DSH Desktop**。
+Works in **`dsh` CLI (web / headless / acp profiles)** and **DSH Desktop**.
 
 ---
 
-## 它解决什么问题
+## 英文概览 / English overview
+
+The same thing in one screen, for readers who would rather not read Chinese first.
+
+**What it is.** A DSH plugin that keeps a short list of behavioral rules per conversation and puts them
+in front of the model on every turn. Two layers stack: rules shared by every conversation, plus optional
+rules that only apply to one session. Both live in a single JSON file you can point anywhere.
+
+**Why not just put the rules in the system prompt.** Because that rewrites the system prompt every time
+a rule changes, and the whole prefix cache is lost. Writing the rules as an extra user message every turn
+is safe but never reclaimed — a few dozen turns later it is thousands of tokens of dead weight. And
+billion-context's own `acp_rule` feature only stores rules, it never injects them (its `RULES_USAGE_PROMPT`
+is defined with zero references in `0.1.202`).
+
+**What this plugin does instead.** It registers one runtime-context section at a fixed order (118) and
+renders the rules into the `Current runtime context` snapshot. When the rendered text has not changed the
+snapshot is not re-projected, so nothing is appended and no tokens are spent. When it does change, one
+message is appended — never a prefix rewritten. The snapshot header makes billion-context classify it as
+`durable/runtime-context`, so the latest copy survives compaction while older copies are still collectable.
+
+**Where you edit it.** A Settings menu entry, the bundle's own page under Plugins → Installed, the legacy
+Plugins → Built-in tab, and a floating panel in the conversation's header — five surfaces, one component,
+one JSON file, no state fork. The panel closes when you click outside it.
+
+**Install.** Through the official installer (`Plugins → Add plugin`, give it the package path or
+`github:ILoveHAKU/dsh-dialog-fence`), or `dsh plugin --profile <name> add <spec>`. A `file:///` mount via
+`scripts/install.mjs` also works for development but does not show up under Installed.
+
+**Tests.** Six zero-dependency suites: `smoke` (host logic), `route` (HTTP API), `client` (bundle shape),
+`render` (real React first frame), `opensource` (pre-publication leak scan), `docs` (this bilingual rule).
+`npm test` runs them in order. None of them touch your live rules file.
+
+**Docs.** [Design & implementation](docs/设计与实施方案.md) covers the mechanism and the rejected
+alternatives; the [operations manual](docs/运维手册与变更记录.md) covers day-to-day use, how to change
+the plugin, troubleshooting and incident records. Both are in Chinese — the code and the code comments
+are the English source of truth.
+
+---
+
+## 它解决什么问题 / What problem it solves
 
 大模型每轮都会忘掉「这次对话的规矩」。常见的补丁方式都有代价：
 
@@ -46,7 +94,7 @@ dialog-fence 的做法：把规则注入到 **运行时上下文快照（runtime
 
 ---
 
-## 五处界面
+## 五处界面 / Five places to edit it
 
 | 界面 | 位置 | 能力 |
 |---|---|---|
@@ -71,11 +119,11 @@ dialog-fence 的做法：把规则注入到 **运行时上下文快照（runtime
 
 ---
 
-## 安装
+## 安装 / Install
 
 推荐走**官方插件安装器**（装在「已安装」分组里，可一键卸载）。改完**必须完全退出并重启 DSH**（宿主半边不走 dsh-hmr 热重载）。
 
-### 方式 A：官方安装器（推荐，出现在「已安装」分组）
+### 方式 A：官方安装器（推荐，出现在「已安装」分组）/ Way A: the official installer (recommended, lands under Installed)
 
 包内已带 `dsh.bundle.patch: ./cordis.patch.yml`、`exports`、`icon` 与 `dsh.client` 声明，三件套齐备（`dependencies` + `dsh.profile.bundles` + bundle patch），因此官方安装器直接认它。
 
@@ -112,7 +160,7 @@ dsh plugin --profile web add "C:\Users\<你>\AppData\Roaming\dsh-desktop\harness
 
 > 想要「改一行就生效」的开发体验，用方式 B。
 
-### 方式 B：`file:///` 挂载（开发用，不进「已安装」清单）
+### 方式 B：`file:///` 挂载（开发用，不进「已安装」清单）/ Way B: a `file:///` mount (development only, never listed under Installed)
 
 ```bash
 # 装到默认 profile（本机 DSH Desktop 用的 profile 叫 web）
@@ -147,7 +195,7 @@ node scripts/install.mjs uninstall
 > **两种方式不要同时用**。同时装会有两条 loader 行重复注册槽位。
 > 从方式 B 切到方式 A 之前，先 `node scripts/install.mjs uninstall`。
 
-### 验证安装
+### 验证安装 / Verify the install
 
 ```bash
 # 1) 无宿主测试（语法 + 行为，不会碰线上规则目录）
@@ -172,9 +220,9 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 
 ---
 
-## 用法
+## 用法 / Usage
 
-### 可视化面板（web / DSH Desktop）
+### 可视化面板（web / DSH Desktop）/ The visual editor (web / DSH Desktop)
 
 重启后：
 
@@ -199,7 +247,7 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 
 面板与这三处配置页都只在 Web 形态出现（CLI / TUI / headless 没有 `connection` 服务，插件会自动跳过路由注册，`/fence` 命令照常可用）。
 
-### 斜杠命令（所有形态）
+### 斜杠命令（所有形态）/ Slash commands (every form)
 
 | 命令 | 作用 |
 |---|---|
@@ -219,7 +267,7 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 | **`/fence all clear`** | 清空通用规则 |
 | `/fence help` | 帮助 |
 
-### 直接编辑围栏文件（推荐给「随时配置和维护」）
+### 直接编辑围栏文件（推荐给「随时配置和维护」）/ Edit the fence file directly (the hands-on route)
 
 默认位置 `<DSH_HOME>/dialog-fence/fence.json`（可用环境变量 `DIALOG_FENCE_FILE` 直接指定文件，或 `DIALOG_FENCE_HOME` 指定基目录；也可以在设置页「更改位置」）。同目录下的 `location.json` 是指针文件，`{ "file": "<绝对路径>" }`。
 
@@ -274,7 +322,7 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 
 ---
 
-## 与 billion-context（主动压缩）的关系
+## 与 billion-context（主动压缩）的关系 / Relationship with billion-context
 
 > 本节记的是**当时（0.1.202）的选型理由与实测结论**，不是对 billion-context 现状的承诺。对方版本一变，下面这些行号级依据就可能失效——请以自己那份 `dist/index.js` 为准。
 
@@ -288,7 +336,7 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 
 ---
 
-## 目录结构
+## 目录结构 / Repository layout
 
 ```
 dialog-fence/
@@ -305,7 +353,7 @@ dialog-fence/
 
 > `rules/` 是 0.3.0–0.6.x 的旧多 txt 目录，只在升级后首次启动时供迁移读取；一旦你的围栏已经是单个 JSON 文件，它就可以删。它也在 `.gitignore` 里，不会被提交。
 
-## 开发与跑测试
+## 开发与跑测试 / Development and tests
 
 本包**零运行时依赖**：宿主半边只用 `process.getBuiltinModule('node:fs' | 'node:path' | 'node:child_process')`，浏览器半边只 `require('react')`（由 DSH 宿主提供）。所以没有 `node_modules` 要装，也没有 lockfile。
 
@@ -336,7 +384,7 @@ export DSH_ASAR="D:\\DSH Desktop\\resources\\app.asar\\node_modules"   # 或者�
 
 **`node_modules` 不是可选项而是不存在**：改完源码**必须重启 DSH** 才生效（`dsh-hmr` 不重载本插件的宿主半边），细节见[运维手册 · 怎么改插件代码](docs/运维手册与变更记录.md)。
 
-### 推送与发布（踩过的坑）
+### 推送与发布（踩过的坑）/ Pushing and releasing (the traps)
 
 **改动含 `.github/workflows/` 时，`repo` 权限的令牌推不上去**：
 
@@ -359,7 +407,7 @@ gh auth refresh -h github.com -s workflow
 - **发布前用一条比扫描器更宽的检索对撞一次。** 本仓库的 `test/opensource.mjs` 第一版 `real-name` 规则要求「名 + 姓」同时出现，于是文档里只写裸名的一句话被放过，整个发布流程（重写历史 → 重写 message → 删库重建 → 转 public → 配保护）因此做了两遍。规则与验证必须是两个独立实现、强度不同：扫描器越怕误报就越容易在「没想到的形态」上失守。放宽规则后记得做反向验证（造一个含敏感词的临时文件 → 确认变红 → 删掉 → 确认转绿），否则「规则太松」和「真的很干净」读数一样。
 
 
-## 上架清单（awesome-dsh-plugin / 插件市场）
+## 上架清单（awesome-dsh-plugin / 插件市场）/ Getting listed (awesome-dsh-plugin / market)
 
 本插件已提交到社区清单 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)：
 [PR #9530](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/9530)，条目
@@ -382,7 +430,30 @@ gh auth refresh -h github.com -s workflow
 
 **踩过的坑（可复现）**：官方 gate `scripts/check-submission.mjs` 可以在本地先跑，但它 `import` 的 `scripts/lib/entries.mjs` 依赖 `js-yaml`。从 `%TEMP%` 直接跑会 `ERR_MODULE_NOT_FOUND`；解法是在临时目录放 `package.json`（`{"type":"module"}`）并把 `node_modules` 做成指向 `profiles/web/node_modules` 的 Junction，再带上 `GITHUB_TOKEN`（`gh auth token`）与代理。提交流程用 GitHub contents API 更省事：先 `POST /git/refs` 建分支（**PUT contents 不会自动建分支，会 404**），再 PUT 条目文件，最后 `gh pr create`。
 
-## 发布到 npm
+### 仓库 About 与逐条文案的双语规则 / Bilingual rule for the About box and every intro field
+
+**仓库右侧那句描述（About）不在仓库里**，它是 git 之外的一份元数据，改它只有一条路：
+
+```bash
+gh api --method PATCH repos/ILoveHAKU/dsh-dialog-fence -f description="<中文句> / <English sentence>"
+```
+
+所以 `test/docs.mjs` 管不到它——那个测试只能检查仓库里的文件。**改 About 之后要自己回读一次**：
+
+```bash
+gh api repos/ILoveHAKU/dsh-dialog-fence --jq '.description'
+```
+
+写 `--jq` 时别在里面塞 `|`（PowerShell 会把它当管道），先落文件再 `ConvertFrom-Json` 更稳。
+
+`package.json` 的 `description` 是另一回事：它进了仓库，也被 `test/docs.mjs` 钉住，而且**一份字段喂三处**——
+DSH 插件页的卡片标题与描述（`readPluginMeta` 读 `name` / `description` / `icon`）、npm 页面、社区清单条目。
+所以它必须同样中文优先。三处一起改，别只改一处。
+
+**新加的对外文案（含 issue/PR 模板、SECURITY、README 章节标题）一律中文在前、英文紧跟。**
+`npm run test:docs` 会在 CI 里挡住回退：标题缺英文、描述缺中文、开头没有英文摘要，都会红。
+
+## 发布到 npm / Publishing to npm
 
 打一个 `v*` tag 就会触发 [`.github/workflows/publish.yml`](.github/workflows/publish.yml)，
 也可以在该 workflow 上手动 `Run workflow`。
@@ -393,7 +464,7 @@ gh auth refresh -h github.com -s workflow
 `test/release.mjs` 会把这条红线钉住——workflow 里出现 `secrets.`、`NPM_TOKEN`
 或字面 `_authToken` 就直接红。
 
-### 长期规则：改完就发，两边不留版本差
+### 长期规则：改完就发，两边不留版本差 / Standing rule: release on every change, no version drift
 
 **每一次改动，只要升了 `package.json` 的版本并推送到 GitHub，就必须同时推到 npm。**
 仓库和 npm 上的版本号不允许长期不一致——两边对不上时，「装哪个才是最新的」这个问题
@@ -413,7 +484,7 @@ npm view dsh-dialog-fence version              # registry 上的 latest
 三条一致才算同步。若仓库领先于 npm（常见于「改完先提交、稍后才打 tag」），
 补推对应 tag 即可，不需要重新提交代码。
 
-### 一次性配置（只需一次，在 npmjs.com 网页上做，不碰本仓库）
+### 一次性配置（只需一次，在 npmjs.com 网页上做，不碰本仓库）/ One-time setup (on npmjs.com, this repo stays untouched)
 
 包 → Settings → **Trusted Publisher** → GitHub Actions，填：
 
@@ -426,7 +497,7 @@ npm view dsh-dialog-fence version              # registry 上的 latest
 
 填完的配置**两天内**必须完成第一次发布，否则会过期需要重配。
 
-### 发版步骤
+### 发版步骤 / Release steps
 
 ```bash
 # 1. 改 package.json 的 version，写 CHANGELOG
@@ -465,13 +536,13 @@ git rev-list -n 1 v0.12.0            -> <tag 指向的 A>
 
 workflow 里钉 Node `24` 并 `npm install -g npm@latest`，就是为了稳过这条线。
 
-### 本机没有凭据时不要硬发
+### 本机没有凭据时不要硬发 / No local credentials? Do not force it
 
 `~/.npmrc` 里如果只是 `//registry.npmjs.org/:_authToken=`（空值），本机 `npm publish`
 会 401。这不是配置坏了，是**故意没有存长期 token**——走上面的 tag 流程即可。
 `npm publish --dry-run` 不校验凭据，所以它能过并不代表能发布。
 
-### 发布失败怎么查（两个最容易走错的坑）
+### 发布失败怎么查（两个最容易走错的坑）/ When a publish fails (the two traps)
 
 **坑 1：千万别给 `setup-node` 加 `registry-url`。** 它会往 `~/.npmrc` 写一行
 `_authToken=${NODE_AUTH_TOKEN}`，npm 看到有 token 就不再做 OIDC 交换，
@@ -506,13 +577,13 @@ npm error code ENEEDAUTH
 `npm info ok`。发布成功后 registry 读缓存还有几分钟延迟，直接查 `dist-tags` 仍是
 旧版本，加 `?ts=<时间戳>` 破缓存才能看到新版本。
 
-## 文档
+## 文档 / Documentation
 
 - [设计与实施方案](docs/设计与实施方案.md) —— 方案、红线、源码级依据、被否决的替代路线
 - [运维手册与变更记录](docs/运维手册与变更记录.md) —— 日常操作、改代码流程、排查手册、事故记录
 - [CHANGELOG.md](CHANGELOG.md) —— 按版本记录改了什么
 
-## 已知限制
+## 已知限制 / Known limits
 
 - **宿主半边改动必须重启 DSH**，`dsh-hmr` 不重载本插件（已实测）。
 - 面板与三处配置入口需要 Web 形态；CLI / TUI / headless 只有 `/fence` 命令。
@@ -524,7 +595,7 @@ npm error code ENEEDAUTH
 - Windows 上 `explorer.exe /select,…` 的退出码**恒为 1**，不可用作成功判据；判定只能靠「窗口是否真的出现」。因此本插件对「已打开」的陈述是「已发出打开请求」而非「已确认窗口可见」。
 - 改位置时**不会覆盖已存在的目标文件**：若目标已存在，直接切换过去（以目标内容为准）。
 
-## 兼容性
+## 兼容性 / Compatibility
 
 在 **DSH Desktop 0.12.1 / harness 0.2.1-rc.2** 上实测通过（五套测试全绿，插件在插件清单里
 `fiberPhase: active`）。逐项核对过的契约：
@@ -543,6 +614,6 @@ npm error code ENEEDAUTH
 
 `dsh.compatibility.dshReleases` 是**死字段**（全 asar 0 命中，没有代码读它），别再用它声明兼容性。
 
-## License
+## 许可 / License
 
 MIT

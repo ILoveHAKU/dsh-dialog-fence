@@ -1,5 +1,5 @@
-name: Bug 报告
-description: 插件行为与预期不符、报错、规则没注入 / 注入了但没生效
+name: Bug 报告 / Bug report
+description: 插件行为与预期不符、报错、规则没注入 / 注入了但没生效 · behavior differs from expectations, errors, rules not injected or injected but not effective
 labels: ["bug"]
 body:
   - type: markdown
@@ -7,42 +7,44 @@ body:
       value: |
         请先把「排查手册」过一遍：`docs/运维手册与变更记录.md` → 三、排查手册。
         贴任何配置前，请把 **会话 id、个人路径、规则原文里的私人内容** 脱敏。
+        Please read the troubleshooting section first: `docs/运维手册与变更记录.md` → 三、排查手册.
+        Before pasting any config, redact **session ids, personal paths, and anything private inside your rules**.
 
   - type: checkboxes
     id: preflight
     attributes:
-      label: 提交前确认
+      label: 提交前确认 / Before you submit
       options:
-        - label: 我已在「已安装」里卸载并重装过插件，且完全退出并重启了 DSH（宿主半边不走热重载）
+        - label: 我已在「已安装」里卸载并重装过插件，且完全退出并重启了 DSH（宿主半边不走热重载）/ I uninstalled and reinstalled the plugin under Installed, then fully quit and restarted DSH (the host half does not hot-reload)
           required: true
-        - label: 我搜过现有 issue / discussions，没有重复
+        - label: 我搜过现有 issue / discussions，没有重复 / I searched existing issues and discussions, this is not a duplicate
           required: true
 
   - type: dropdown
     id: form
     attributes:
-      label: 运行形态
+      label: 运行形态 / Where it runs
       options:
         - DSH Desktop
         - dsh CLI（web profile）
         - dsh CLI（headless profile）
-        - dsh CLI（其它 profile，请在下面注明）
+        - dsh CLI（其它 profile，请在下面注明 / other profile, say which below）
     validations:
       required: true
 
   - type: input
     id: versions
     attributes:
-      label: 版本
-      description: DSH 版本 + dsh-dialog-fence 版本（package.json 的 version）
-      placeholder: "DSH 0.2.0-rc.2 / dialog-fence 0.9.0"
+      label: 版本 / Versions
+      description: DSH 版本 + dsh-dialog-fence 版本（package.json 的 version）/ DSH version + dsh-dialog-fence version (the version in package.json)
+      placeholder: "DSH 0.2.1-rc.2 / dialog-fence 0.12.2"
     validations:
       required: true
 
   - type: input
     id: os
     attributes:
-      label: 操作系统
+      label: 操作系统 / Operating system
       placeholder: "Windows 11 23H2 / macOS 15.2 / Ubuntu 24.04"
     validations:
       required: true
@@ -50,8 +52,8 @@ body:
   - type: textarea
     id: steps
     attributes:
-      label: 复现步骤
-      description: 从「装好插件」到「看到问题」的最短路径，一步一步写。
+      label: 复现步骤 / Steps to reproduce
+      description: 从「装好插件」到「看到问题」的最短路径，一步一步写。/ The shortest path from "plugin installed" to "problem seen", one step per line.
       placeholder: |
         1. 设置 → 对话围栏 → 添加规则「...」
         2. 新开一个对话，问「...」
@@ -62,15 +64,15 @@ body:
   - type: textarea
     id: expected
     attributes:
-      label: 期望 vs 实际
-      validations:
-        required: true
+      label: 期望 vs 实际 / Expected vs actual
+    validations:
+      required: true
 
   - type: textarea
     id: logs
     attributes:
-      label: 报错 / 日志
-      description: 控制台报错、`/fence` 子命令的输出、`fence.json` 内容（脱敏后）。没有就写「无」。
+      label: 报错 / 日志 · Errors / logs
+      description: 控制台报错、`/fence` 子命令的输出、`fence.json` 内容（脱敏后）。没有就写「无」。/ Console errors, the output of any `/fence` subcommand, and `fence.json` (redacted). Write "none" if there is nothing.
       render: text
     validations:
       required: true
@@ -78,7 +80,7 @@ body:
   - type: textarea
     id: extra
     attributes:
-      label: 其它线索
-      description: 是否同时装了 billion-context 等压缩 / 上下文插件、是否改过围栏文件位置。
+      label: 其它线索 / Anything else
+      description: 是否同时装了 billion-context 等压缩 / 上下文插件、是否改过围栏文件位置。/ Whether compaction or context plugins such as billion-context are also installed, and whether you moved the fence file.
     validations:
       required: false
