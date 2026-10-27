@@ -124,8 +124,12 @@ assert.match(tabMarkup, /class="dialog-fence-page"/, 'plugins tab renders its pa
 // 又不会撞上泄漏扫描器的「真实 session id」规则（那条规则只认 UUID 形的十六进制）。
 const S1 = 'session-zzzzzzzz-yyyy-wwww-vvvv-uuuuuuuuuuuu';
 const S2 = 'session-tttttttt-ssss-rrrr-qqqq-pppppppppppp';
+// 占位 id 一律只用非十六进制字母（g-z）：既能被当成「像 id 的字符串」，
+// 又不会撞上泄漏扫描器的「真实 session id」规则（那条规则只认 UUID 形的十六进制）。
+const S3 = 'session-oooooooo-nnnn-mmmm-llll-kkkkkkkkkkkk';
+const S4 = 'session-jjjjjjjj-iiii-hhhh-gggg-zzzzzzzzzzzz';
 const fakeSessions = {
-  ids: [S1, S2],
+  ids: [S1, S2, S3, S4],
   byId: {
     [S1]: {
       id: S1,
@@ -135,7 +139,13 @@ const fakeSessions = {
       blank: false,
     },
     // 这一行没有标题、displayTitle 也已退化成 id —— 界面必须自己挡掉，改用「未命名对话」。
-    [S2]: { id: S2, displayTitle: S2, retainedBy: {}, blank: true },
+    // 注意它 blank:false：真的开过、只是没起名字，这种应当出现在下拉里。
+    [S2]: { id: S2, displayTitle: S2, retainedBy: {}, blank: false },
+    // 下面两行是「建了但一句话都没说过」的空对话。宿主给它们的 displayTitle 是
+    // cwd 的 basename（见 dsh-api-session-controller 的 displayTitleOf），
+    // 于是下拉里会冒出一堆 `harness` / `workspace` —— 用户 CR-20。
+    [S3]: { id: S3, displayTitle: 'harness', retainedBy: {}, blank: true },
+    [S4]: { id: S4, displayTitle: 'workspace', retainedBy: {}, blank: true },
   },
 };
 const useSessionsStub = (selector) => selector(fakeSessions);
@@ -216,6 +226,49 @@ assert.match(
   /\.dialog-fence-select\{[^}]*flex:1/,
   'the select grows to fill its row instead of keeping a fixed max-width',
 );
+
+// ---- 3.8) 空对话不得进入下拉（用户 CR-20）------------------------------------
+// 事故样子：下拉里冒出大量 `harness` / `workspace` 选项。
+// 根因不是「工作区被当成了对话」，而是那些「建了但一句话没说过」的空对话
+// （宿主 sessions store 里 blank === true）没有 title，displayTitleOf() 于是
+// 退化成 cwd 的 basename —— 工作区根目录恰好叫 harness / workspace。
+// 官方侧边栏对 blank 行是整行藏掉的（dsh-client-ui-workspace 的 displayTitle
+// 里 `node.blank ? t("session.new") : ...`），我们照做：
+// 既不列进下拉，也不让它顶替「当前对话」的判断。
+assert.doesNotMatch(withSessionsMarkup, />harness</, 'a blank conversation must not surface as its cwd basename');
+assert.doesNotMatch(withSessionsMarkup, />workspace</, 'a blank conversation must not surface as its cwd basename');
+assert.equal(
+  (withSessionsMarkup.match(/<option/g) ?? []).length,
+  2,
+  'only the two real conversations are offered; the blank ones are hidden entirely',
+);
+assert.match(source, /blank === true\) continue/, 'the candidate loop drops blank rows explicitly');
+
+// ---- 3.9) 四个入口必须是同一套界面（用户 CR-20 第二句）----------------------
+// 用户原话：「保证多个入口进来的设置界面UI同步」。
+// 同步的唯一可靠做法不是「四处各写一份、再互相抄」，而是四处注册**同一个组件**。
+// 这里钉的就是这个身份关系：设置左栏 / 插件页标签页 / 组合包详情页拿到的是同一个
+// 函数对象，浮层里渲染的也是它。任何一次「顺手复制一份改改」都会让这条断言立刻红。
+assert.equal(registrations[2].component, registrations[3].component, 'settings section and plugins tab are the same component');
+assert.equal(registrations[2].component, registrations[4].component, 'bundle config page is the same component too');
+assert.equal(Panel.toString().includes('FencePage'), true, 'the overlay renders that same component instead of its own copy');
+// 同样的 props 渲染出同样的 HTML —— 成分相同、文案相同、顺序相同。
+const sameA = renderToStaticMarkup(React.createElement(FencePage, { useSessions: useSessionsStub }));
+const sameB = renderToStaticMarkup(React.createElement(registrations[3].component, { useSessions: useSessionsStub }));
+assert.equal(sameA, sameB, 'two entry points render byte-identical markup for the same props');
+// 每个入口都要能长出同一张「某个对话的额外规则」卡片，而不是只有设置页有。
+for (const [label, component, props] of [
+  ['settings section', FencePage, { useSessions: useSessionsStub }],
+  ['plugins tab', registrations[3].component, { useSessions: useSessionsStub }],
+  ['bundle config', registrations[4].component, { view: 'page', useSessions: useSessionsStub }],
+  ['overlay', FencePage, { flat: true, preferredSessionId: S1, useSessions: useSessionsStub }],
+]) {
+  const markup = renderToStaticMarkup(React.createElement(component, props));
+  assert.match(markup, /某个对话的额外规则（可选）/, `${label} carries the per-conversation card`);
+  assert.match(markup, /class="dialog-fence-select"/, `${label} offers the conversation picker`);
+  assert.match(markup, /停用该对话|启用该对话/, `${label} can toggle that conversation`);
+  assert.doesNotMatch(markup, />harness</, `${label} hides blank conversations`);
+}
 
 // ---- 4) 组合包详情页里的配置区（owner 只传 view: 'page'）---------------------
 const bundleMarkup = renderToStaticMarkup(React.createElement(BundleConfig, { view: 'page' }));

@@ -108,8 +108,15 @@ dialog-fence 的做法：把规则注入到 **运行时上下文快照（runtime
 会话按钮上的数字就是**真实注入条数**（通用 + 本对话专属），不是只数会话层。
 
 设置页的对话下拉里，选项文字用**对话名称**（重命名过就用你起的名字，否则用项目目录名；
-连这些都没有的空白对话显示「未命名对话 N」）——**任何情况下都不会把 `session-<uuid>` 显示出来**。
+真的用过但没起名字的对话显示「未命名对话 N」）——**任何情况下都不会把 `session-<uuid>` 显示出来**。
 当前对话会标注「（当前）」并默认选中，所以「给现在这个对话加一条专属规则」不需要先选。
+
+**建了但一句话都没说过的空对话不会出现在下拉里**（0.12.4 起）。这类对话在宿主侧带
+`blank: true` 且没有标题，宿主会把它的显示名退化成**项目目录名**，于是下拉里会冒出一串
+重复的 `harness` / `workspace`；官方侧边栏本来就是把这类行整行藏掉的，这里保持一致。
+Conversations that were created but never used are not listed (since 0.12.4): they carry
+`blank: true` and no title, so the host falls back to the workspace folder name and the picker
+would fill up with repeated `harness` / `workspace` entries.
 
 > 为什么卡片在「已安装」而不是「官方」：`plugins.item` 槽位的语义被写死为「官方分组里的一张卡片」，
 > 改 id / order 都改不到别处；`plugins.bundle.config` 才属于「组合包自己的配置」，

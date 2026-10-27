@@ -578,12 +578,18 @@ window.__ModuleLoader__.load({
       const notice = snapshot.notice;
 
       // 下拉里的候选：正在运行的对话（有名字）+ 围栏文件里已经有规则的对话（可能已归档）。
+      // 两类行要挡掉：
+      //  1) 子代理不是用户眼里的「对话」；
+      //  2) blank === true 的空对话 —— 「建了但一句话没说过」。
+      //     宿主给这种行的 displayTitle 是 cwd 的 basename（dsh-api-session-controller
+      //     的 displayTitleOf：没有 title 就退回 workspaceTitleOf(cwd)），于是下拉里会
+      //     冒出一堆 `harness` / `workspace`。官方侧边栏对 blank 行是整行藏掉的，照做。
       const liveRows = [];
       if (sessionById !== undefined && sessionById !== null) {
         for (const id of Object.keys(sessionById)) {
           const row = sessionById[id];
-          // 子代理不是用户眼里的「对话」，不列出来。
           if (row?.origin === 'subagent') continue;
+          if (row?.blank === true) continue;
           liveRows.push({ id: String(row?.id ?? id), label: sessionLabelOf(row, liveRows.length) });
         }
       }

@@ -13,6 +13,32 @@ Versions are tagged from `0.2.0` on; `0.1.0` was the first drop and was never co
 
 ---
 
+## 0.12.4 — 专属规则下拉不再混进工作区名；四个入口钉成同一个组件
+
+用户报告：设置页「某个对话的额外规则（可选）」的对话下拉里，混进大量
+`harness` / `workspace` 选项，夹在真实对话标题之间；同时要求「多个入口进来的设置界面 UI 同步」。
+
+- **下拉里的工作区名（缺陷）**：那些选项不是「工作区被当成了对话」，而是「建了但一句话都没说过」
+  的空对话（宿主 `sessions` store 里 `blank === true`）。这种行没有 `title`，宿主的
+  `displayTitleOf(title, cwd, id)` 于是退回 `cwd` 的 basename——工作区根目录恰好叫
+  `harness`（`C:\...\dsh-desktop\harness`）和 `workspace`（`D:\workspace`），重复出现是因为
+  空对话很多。官方侧边栏对 blank 行是**整行藏掉**的（`dsh-client-ui-workspace` 里
+  `node.blank ? t("session.new") : ...`），我们照做：候选循环里显式 `if (row?.blank === true) continue;`。
+  注意只挡 `blank`，不挡「没起名字但真的用过」的对话——后者仍然列出，显示成 `未命名对话 N`。
+- **多入口 UI 同步（加固）**：四个入口（设置左栏、插件页标签页、组合包详情页、会话头浮层）本来就
+  注册的是同一个 `FencePage` 组件，浮层只是外面套一层标题壳。这次把这条身份关系**用测试钉死**，
+  防止以后有人「顺手复制一份改改」：新增 `test/render.mjs` 3.9 段，断言
+  `registrations[2].component === registrations[3].component === registrations[4].component`、
+  浮层源码里引用的是 `FencePage`、以及同一个 props 在两个入口渲染出的 HTML 逐字节相同；
+  再对四个入口逐一断言「专属规则卡片 / 对话下拉 / 停用启用按钮 / 不显示空对话」都在。
+
+先红后绿：改之前 `test/render.mjs` 3.8 段红在
+`AssertionError: a blank conversation must not surface as its cwd basename`，
+渲染结果里能直接看到 `<option value="2">harness</option><option value="3">workspace</option>`；
+改完 `OK all dialog-fence render assertions passed`。七套测试全绿。
+
+---
+
 ## 0.12.3 — 对外介绍改为中英双语、中文优先
 
 无功能改动，只改对外文案与新增一条测试。
