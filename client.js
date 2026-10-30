@@ -271,6 +271,18 @@ window.__ModuleLoader__.load({
       'background:var(--dsw-alias-bg-layer-2)}',
       '.dialog-fence-row[data-editing="true"]{background:var(--dsw-alias-bg-layer-3)}',
       '.dialog-fence-index{color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;min-width:16px}',
+      // 单条规则开关：做成滑块（track + knob），点一下立即切换，不需要进编辑态。
+      // 停用的规则正文降低对比度，让人一眼看出「这条暂时不生效」。
+      '.dialog-fence-switch{flex:none;position:relative;width:30px;height:16px;padding:0;border-radius:8px;',
+      'border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);cursor:pointer;',
+      'transition:background .12s ease,border-color .12s ease}',
+      '.dialog-fence-switch::after{content:"";position:absolute;top:2px;left:2px;width:10px;height:10px;',
+      'border-radius:50%;background:var(--dsw-alias-label-tertiary);transition:transform .12s ease,background .12s ease}',
+      '.dialog-fence-switch[data-on="true"]{background:var(--dsw-alias-brand-primary);',
+      'border-color:var(--dsw-alias-brand-primary)}',
+      '.dialog-fence-switch[data-on="true"]::after{transform:translateX(14px);background:#fff}',
+      '.dialog-fence-switch[disabled]{opacity:.5;cursor:default}',
+      '.dialog-fence-row[data-on="false"] > .dialog-fence-text{opacity:.45}',
       '.dialog-fence-text{flex:1;white-space:pre-wrap;word-break:break-word;line-height:1.5}',
       '.dialog-fence-file{color:var(--dsw-alias-label-tertiary);font-size:11px;font-family:ui-monospace,monospace}',
       '.dialog-fence-input{flex:1;min-width:0;height:28px;padding:0 8px;border-radius:7px;box-sizing:border-box;',
@@ -379,9 +391,11 @@ window.__ModuleLoader__.load({
     // ---------------------------------------------------------------------
 
     function RuleRow(props) {
-      const { rule, index, busy, onSave, onRemove } = props;
+      const { rule, index, busy, onSave, onRemove, onToggle } = props;
       const [editing, setEditing] = react.useState(false);
       const [draft, setDraft] = react.useState(rule.text);
+      // 老快照里没有 enabled 字段时按启用处理，避免「一升级全变灰」。
+      const on = rule.enabled !== false;
 
       react.useEffect(() => {
         setDraft(rule.text);
@@ -394,10 +408,23 @@ window.__ModuleLoader__.load({
         setEditing(false);
       };
 
+      // 单条启停滑块：点一下立刻生效（不等编辑态），停用只是「暂时不进注入」，规则正文保留。
+      const switchNode = react.createElement('button', {
+        type: 'button',
+        className: 'dialog-fence-switch',
+        'data-on': on ? 'true' : 'false',
+        role: 'switch',
+        'aria-checked': on ? 'true' : 'false',
+        'aria-label': on ? '停用这条规则' : '启用这条规则',
+        title: on ? '当前启用，点击暂时停用' : '当前停用，点击启用',
+        disabled: busy,
+        onClick: () => onToggle(rule.index, !on),
+      });
+
       if (!editing) {
         return react.createElement(
           'div',
-          { className: 'dialog-fence-row' },
+          { className: 'dialog-fence-row', 'data-on': on ? 'true' : 'false' },
           react.createElement('span', { className: 'dialog-fence-index' }, String(index + 1)),
           react.createElement('span', { className: 'dialog-fence-text' }, rule.text),
           react.createElement(
@@ -410,11 +437,13 @@ window.__ModuleLoader__.load({
             { type: 'button', className: 'dialog-fence-btn', disabled: busy, onClick: () => onRemove(rule.index) },
             '删',
           ),
+          // 滑块固定在最右端（CR-18）：放序号后面挤在正文左侧，一列规则读下来视线被打断。
+          switchNode,
         );
       }
       return react.createElement(
         'div',
-        { className: 'dialog-fence-row', 'data-editing': 'true' },
+        { className: 'dialog-fence-row', 'data-editing': 'true', 'data-on': on ? 'true' : 'false' },
         react.createElement('span', { className: 'dialog-fence-index' }, String(index + 1)),
         react.createElement(
           'div',
@@ -457,6 +486,7 @@ window.__ModuleLoader__.load({
           },
           '取消',
         ),
+        switchNode,
       );
     }
 
@@ -739,6 +769,7 @@ window.__ModuleLoader__.load({
                     busy,
                     onSave: (target, text) => act(COMMON_SCOPE, 'update', { index: target, text }),
                     onRemove: (target) => act(COMMON_SCOPE, 'remove', { index: target }),
+                    onToggle: (target, enabled) => act(COMMON_SCOPE, 'toggleRule', { index: target, enabled }),
                   }),
                 ),
           react.createElement('textarea', {
@@ -869,6 +900,7 @@ window.__ModuleLoader__.load({
                       busy,
                       onSave: (target, text) => act(targetSession, 'update', { index: target, text }),
                       onRemove: (target) => act(targetSession, 'remove', { index: target }),
+                      onToggle: (target, enabled) => act(targetSession, 'toggleRule', { index: target, enabled }),
                     }),
                   ),
           targetSession === ''

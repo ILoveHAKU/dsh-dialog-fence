@@ -324,6 +324,28 @@ assert.doesNotMatch(source, /if \(event\.key === 'Enter'\) commit\(\);/, 'bare E
 assert.match(source, /className: 'dialog-fence-text' \}, rule\.text/, 'idle rows stay plain text');
 assert.match(source, /if \(!editing\)/, 'the editor only appears while editing');
 
+// ---- 5.4) 单条启停滑块贴在最右端（0.13.0，用户 CR-21）----------------------
+// 缺陷：滑块最初放在序号后面、正文左侧。一行是「序号 滑块 正文 …」，一列规则读下来
+// 视线每行都被滑块截断一次；用户原话「滑块放到右边，在左边太难受了」。
+// 正文是 flex:1，所以真正的右端 = 正文 span 之后（「改」「删」之后）。
+// 这里同时钉住两件事：滑块排在正文之后、并且是一行里最后一个子节点。
+const idleRow = source.slice(
+  source.indexOf('if (!editing) {'),
+  source.indexOf("'div',\n        { className: 'dialog-fence-row', 'data-editing': 'true'"),
+);
+assert.ok(idleRow.length > 0, 'the idle-row render branch is locatable in the bundle');
+assert.match(idleRow, /rule\.text[\s\S]*switchNode/, 'the switch comes after the rule text, not before it');
+assert.match(
+  idleRow,
+  /switchNode,\n\s*\);/,
+  'in the idle row the switch is the last child, so it sits flush against the right edge',
+);
+assert.doesNotMatch(
+  source,
+  /switchNode,\n\s*react\.createElement\('span', \{ className: 'dialog-fence-text' \}/,
+  'the switch is no longer wedged between the index and the text',
+);
+
 // ---- 5.5) 设置页补上「专属规则」编辑区 + 会话下拉（显示名称，不显示 id）------
 // 缺陷（用户 CR-17 第 1 条）：设置页第三张卡过去只有两句说明文字，
 // 让用户「去右上角浮层里改」，两处界面不同步。现在两边共用同一份数据与同一套动作。

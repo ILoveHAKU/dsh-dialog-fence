@@ -158,7 +158,30 @@ function fenceDir() {
 // ---------------------------------------------------------------------------
 
 function emptyFence() {
-  return { version: FENCE_VERSION, enabled: true, rules: [], sessions: {} };
+  // ruleEnabled 与 rules 等长：true = 该条生效，false = 该条被临时停用。
+  // 单独放一条并行数组而不是把 rules 改成对象，是为了让老文件、老前端、老命令
+  // 全部零迁移继续工作（rules 永远是纯字符串数组）。
+  return { version: FENCE_VERSION, enabled: true, rules: [], ruleEnabled: [], sessions: {} };
+}
+
+/** 把任意「启停位」输入收敛成与规则等长的布尔数组；缺省 / 脏值一律视为启用。 */
+function alignFlags(value, length) {
+  const source = Array.isArray(value) ? value : [];
+  const flags = [];
+  for (let i = 0; i < length; i += 1) flags.push(source[i] !== false);
+  return flags;
+}
+
+/**
+ * 就地补齐 / 截断启停位数组，**保持数组引用不变**。
+ * applyAction 里拿到的是挂在 fence 上的那个数组，换成新数组就改不到 fence（同 0.7.0 的 push 坑）。
+ */
+function alignFlagsInPlace(flags, length) {
+  for (let i = 0; i < length; i += 1) {
+    if (typeof flags[i] !== 'boolean') flags[i] = flags[i] !== false;
+  }
+  flags.length = length;
+  return flags;
 }
 
 function normalizeText(value) {
@@ -180,9 +203,14 @@ function normalizeFence(parsed) {
   if (parsed === null || typeof parsed !== 'object') return fence;
   if (parsed.enabled === false) fence.enabled = false;
   if (Array.isArray(parsed.rules)) {
+    const flags = Array.isArray(parsed.ruleEnabled) ? parsed.ruleEnabled : [];
     for (const entry of parsed.rules) {
       const text = normalizeText(entry);
-      if (text.length > 0) fence.rules.push(text);
+      if (text.length === 0) continue;
+      // 启停位必须跟着**下标**走：空规则被丢弃时，它对应的那一位也要一起丢弃，
+      // 否则一条空白规则就能让后面所有规则的开关错位一格。
+      fence.ruleEnabled.push(flags[fence.rules.length] !== false);
+      fence.rules.push(text);
     }
   }
   const sessions = parsed.sessions;
@@ -191,13 +219,17 @@ function normalizeFence(parsed) {
       const safe = sanitizeSessionId(id);
       if (safe === '' || entry === null || typeof entry !== 'object') continue;
       const rules = [];
+      const ruleEnabled = [];
       if (Array.isArray(entry.rules)) {
+        const flags = Array.isArray(entry.ruleEnabled) ? entry.ruleEnabled : [];
         for (const value of entry.rules) {
           const text = normalizeText(value);
-          if (text.length > 0) rules.push(text);
+          if (text.length === 0) continue;
+          ruleEnabled.push(flags[rules.length] !== false);
+          rules.push(text);
         }
       }
-      fence.sessions[safe] = { enabled: entry.enabled !== false, rules };
+      fence.sessions[safe] = { enabled: entry.enabled !== false, rules, ruleEnabled };
     }
   }
   return fence;
@@ -333,6 +365,8 @@ function migrateLegacyIfNeeded() {
   const fence = emptyFence();
   if (legacyState?.global?.enabled === false) fence.enabled = false;
   fence.rules = readTextDir(path.join(LEGACY_DIR, 'common'));
+  // 老数据没有单条启停概念：迁移后一律启用。
+  fence.ruleEnabled = alignFlags([], fence.rules.length);
   if (fence.rules.length === 0 && legacyState?.sessions === undefined) {
     let anySession = false;
     try {
@@ -358,7 +392,7 @@ function migrateLegacyIfNeeded() {
     const explicit = legacyState?.sessions?.[safe];
     const enabled = explicit === undefined ? rules.length > 0 : explicit?.enabled !== false;
     if (rules.length === 0 && explicit === undefined) continue;
-    fence.sessions[safe] = { enabled, rules };
+    fence.sessions[safe] = { enabled, rules, ruleEnabled: alignFlags([], rules.length) };
   }
 
   try {
@@ -378,16 +412,37 @@ function commonRules(fence) {
   return Array.isArray(fence.rules) ? fence.rules : [];
 }
 
+/** 通用规则的启停位数组（与 commonRules 等长；缺字段视为全部启用）。 */
+function commonFlags(fence) {
+  return alignFlags(fence.ruleEnabled, commonRules(fence).length);
+}
+
 /** 某个会话的专属规则；会话在 sessions 里没有条目时返回空数组。 */
 function sessionRules(fence, sessionId) {
   const entry = fence.sessions?.[sessionId];
   return entry !== undefined && Array.isArray(entry.rules) ? entry.rules : [];
 }
 
+function sessionFlags(fence, sessionId) {
+  const entry = fence.sessions?.[sessionId];
+  return alignFlags(entry?.ruleEnabled, Array.isArray(entry?.rules) ? entry.rules.length : 0);
+}
+
 function sessionEntry(fence, sessionId) {
-  if (fence.sessions[sessionId] === undefined) fence.sessions[sessionId] = { enabled: true, rules: [] };
+  if (fence.sessions[sessionId] === undefined) fence.sessions[sessionId] = { enabled: true, rules: [], ruleEnabled: [] };
   if (!Array.isArray(fence.sessions[sessionId].rules)) fence.sessions[sessionId].rules = [];
+  // 老文件里没有这一层：补齐成与规则等长的全 true，让后续按下标写入永远有位可写。
+  fence.sessions[sessionId].ruleEnabled = alignFlags(fence.sessions[sessionId].ruleEnabled, fence.sessions[sessionId].rules.length);
   return fence.sessions[sessionId];
+}
+
+/** 只保留启用的规则文本（供注入与渲染）。 */
+function pickEnabled(rules, flags) {
+  const out = [];
+  for (let i = 0; i < rules.length; i += 1) {
+    if (flags[i] !== false) out.push(rules[i]);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -427,24 +482,29 @@ function sessionIdOf(assembleContext) {
   return typeof id === 'string' && id.length > 0 ? id : '';
 }
 
-/** 会话层是否启用：有显式条目以它为准，否则「有会话专属规则」即启用。 */
+/**
+ * 会话层是否启用：有显式条目以它为准，否则「有会话专属规则」即启用。
+ * 判据用**启用中的**规则条数：全部规则都被单条开关停掉时，这个会话就是没生效的。
+ */
 function isSessionEnabled(fence, sessionId, rules) {
+  const active = pickEnabled(rules, sessionFlags(fence, sessionId)).length;
   const entry = fence.sessions[sessionId];
-  if (entry !== undefined) return entry.enabled !== false && rules.length > 0;
-  return rules.length > 0;
+  if (entry !== undefined) return entry.enabled !== false && active > 0;
+  return active > 0;
 }
 
 /**
  * 实际注入的规则正文 = 通用规则（每个对话都有）+ 本会话专属规则。
  * 通用规则先编号，会话规则接在后面。总开关关掉时一律不注入。
+ * 单条开关关掉的规则直接不参与渲染 —— 编号按「启用后的顺序」连续，不留空洞。
  */
 function fenceTextFor(sessionId) {
   if (sessionId === '') return '';
   const fence = loadFence();
   if (fence.enabled !== true) return '';
-  const texts = [...commonRules(fence)];
+  const texts = pickEnabled(commonRules(fence), commonFlags(fence));
   const own = sessionRules(fence, sessionId);
-  if (isSessionEnabled(fence, sessionId, own)) texts.push(...own);
+  if (isSessionEnabled(fence, sessionId, own)) texts.push(...pickEnabled(own, sessionFlags(fence, sessionId)));
   return renderRuleTexts(texts);
 }
 
@@ -464,9 +524,13 @@ function jsonResponse(payload, status = 200) {
 
 const LIMITS = { maxRules: MAX_RULES, maxTotalChars: MAX_TOTAL_CHARS, maxRuleChars: MAX_RULE_CHARS };
 
-/** 把规则数组投影成带稳定序号的列表，供面板渲染与按序号增删改。 */
-function rulesView(texts) {
-  return texts.map((text, index) => ({ index, text }));
+/**
+ * 把规则数组投影成带稳定序号的列表，供面板渲染与按序号增删改。
+ * flags 缺省 = 全部启用；enabled 是**附加字段**，index / text 的形状保持不变。
+ */
+function rulesView(texts, flags) {
+  const resolved = alignFlags(flags, texts.length);
+  return texts.map((text, index) => ({ index, text, enabled: resolved[index] !== false }));
 }
 
 function fileInfo() {
@@ -477,8 +541,10 @@ function fileInfo() {
 /** 通用规则层的快照（设置页主视图就是它）。 */
 function commonSnapshotOf() {
   const fence = loadFence();
-  const rules = rulesView(commonRules(fence));
-  const rendered = fence.enabled === true ? renderRuleTexts(commonRules(fence)) : '';
+  const all = commonRules(fence);
+  const flags = commonFlags(fence);
+  const rules = rulesView(all, flags);
+  const rendered = fence.enabled === true ? renderRuleTexts(pickEnabled(all, flags)) : '';
   return {
     ok: true,
     scope: 'common',
@@ -503,8 +569,8 @@ function snapshotOf(sessionId) {
     sessionId,
     enabled: isSessionEnabled(fence, sessionId, own),
     globalEnabled: fence.enabled === true,
-    common: { rules: rulesView(commonRules(fence)), ...fileInfo() },
-    rules: rulesView(own),
+    common: { rules: rulesView(commonRules(fence), commonFlags(fence)), ...fileInfo() },
+    rules: rulesView(own, sessionFlags(fence, sessionId)),
     rendered,
     chars: rendered.length,
     tokens: tokenEstimate(rendered),
@@ -519,11 +585,14 @@ function knownSessions(fence) {
   for (const [sessionId, entry] of Object.entries(fence.sessions ?? {})) {
     if (sanitizeSessionId(sessionId) === '') continue;
     const rules = Array.isArray(entry?.rules) ? entry.rules : [];
+    const flags = sessionFlags(fence, sessionId);
+    const active = pickEnabled(rules, flags);
     rows.push({
       sessionId,
-      enabled: entry?.enabled !== false && rules.length > 0,
+      enabled: entry?.enabled !== false && active.length > 0,
       ruleCount: rules.length,
-      chars: rules.reduce((sum, text) => sum + text.length, 0),
+      activeRuleCount: active.length,
+      chars: active.reduce((sum, text) => sum + text.length, 0),
     });
   }
   rows.sort((left, right) => left.sessionId.localeCompare(right.sessionId));
@@ -533,8 +602,10 @@ function knownSessions(fence) {
 /** 设置页快照（插件页那一栏用）。主视图是通用规则层。 */
 function overviewOf() {
   const fence = loadFence();
-  const common = rulesView(commonRules(fence));
-  const rendered = fence.enabled === true ? renderRuleTexts(commonRules(fence)) : '';
+  const all = commonRules(fence);
+  const flags = commonFlags(fence);
+  const common = rulesView(all, flags);
+  const rendered = fence.enabled === true ? renderRuleTexts(pickEnabled(all, flags)) : '';
   return {
     ok: true,
     globalEnabled: fence.enabled === true,
@@ -635,7 +706,6 @@ function moveFenceFile(target) {
 function applyAction(sessionId, action, payload) {
   const fence = loadFence();
   const scope = payload?.scope === 'common' ? 'common' : 'session';
-  const texts = scope === 'common' ? commonRules(fence) : null;
 
   // 总开关与任何会话无关，必须在会话 id 校验之前处理。
   if (action === 'toggleGlobal' || action === 'switch') {
@@ -663,7 +733,18 @@ function applyAction(sessionId, action, payload) {
   if (scope === 'session' && sessionId === '') return { ok: false, error: '缺少会话 id' };
   // 必须拿到**挂在 fence 上的那个数组**：sessionRules() 在会话没有条目时返回的是临时空数组，
   // 往里 push 改不到 fence（0.7.0 首次实现的 bug：新会话 add 静默无效）。
-  const list = scope === 'common' ? texts : sessionEntry(fence, sessionId).rules;
+  // 启停位数组同理，就地补齐而不是换新数组。
+  let list;
+  let flags;
+  if (scope === 'common') {
+    list = fence.rules;
+    if (!Array.isArray(fence.ruleEnabled)) fence.ruleEnabled = [];
+    flags = alignFlagsInPlace(fence.ruleEnabled, list.length);
+  } else {
+    const entry = sessionEntry(fence, sessionId);
+    list = entry.rules;
+    flags = alignFlagsInPlace(entry.ruleEnabled, list.length);
+  }
 
   if (action === 'toggle') {
     if (scope === 'common') {
@@ -681,6 +762,8 @@ function applyAction(sessionId, action, payload) {
     if (list.some((existing) => existing === text)) return '';
     if (list.length >= MAX_RULES) return `规则已达上限 ${MAX_RULES} 条`;
     list.push(text);
+    // 新规则默认启用 —— 「配置以后就能用」，不需要再手动打开。
+    flags.push(true);
     return '';
   };
 
@@ -695,6 +778,14 @@ function applyAction(sessionId, action, payload) {
   const index = Number.parseInt(String(payload.index ?? ''), 10);
   const valid = Number.isInteger(index) && index >= 0 && index < list.length;
 
+  if (action === 'toggleRule') {
+    if (!valid) return { ok: false, error: `没有第 ${payload.index} 条规则` };
+    // 不传 enabled 就当作「切换」：面板上的滑块只发 index 也能用。
+    flags[index] = typeof payload.enabled === 'boolean' ? payload.enabled : flags[index] === false;
+    saveFence(fence);
+    return scope === 'common' ? commonSnapshotOf() : snapshotOf(sessionId);
+  }
+
   if (action === 'update') {
     if (!valid) return { ok: false, error: `没有第 ${payload.index} 条规则` };
     const text = normalizeText(payload.text);
@@ -706,18 +797,22 @@ function applyAction(sessionId, action, payload) {
   }
   if (action === 'remove') {
     if (!valid) return { ok: false, error: `没有第 ${payload.index} 条规则` };
+    // 规则与启停位必须同时删，否则后面每一条的开关都会错位一格。
     list.splice(index, 1);
+    flags.splice(index, 1);
     saveFence(fence);
     return scope === 'common' ? commonSnapshotOf() : snapshotOf(sessionId);
   }
   if (action === 'clear') {
     list.length = 0;
+    flags.length = 0;
     saveFence(fence);
     return scope === 'common' ? commonSnapshotOf() : snapshotOf(sessionId);
   }
   if (action === 'reset') {
     if (scope === 'common') {
       fence.rules = [];
+      fence.ruleEnabled = [];
     } else {
       delete fence.sessions[sessionId];
     }
@@ -778,24 +873,26 @@ function statusText(sessionId) {
   const fence = loadFence();
   const own = sessionRules(fence, sessionId);
   const common = commonRules(fence);
+  const ownFlags = sessionFlags(fence, sessionId);
+  const commonRuleFlags = commonFlags(fence);
   const enabled = isSessionEnabled(fence, sessionId, own);
   const text = fenceTextFor(sessionId);
   const lines = [
     `/fence status — 会话 ${sessionId}`,
     `总开关: ${fence.enabled === true ? '开' : '关（所有对话都不注入）'}`,
-    `通用规则: ${common.length} 条（对所有对话生效）`,
+    `通用规则: ${common.length} 条（启用 ${pickEnabled(common, commonRuleFlags).length} 条，对所有对话生效）`,
     `本会话: ${enabled ? '已启用' : '未启用（本会话专属规则不注入）'}`,
-    `本会话专属规则: ${own.length} 条`,
+    `本会话专属规则: ${own.length} 条（启用 ${pickEnabled(own, ownFlags).length} 条）`,
     `实际注入: ${text.length} 字符 ≈ ${tokenEstimate(text)} token`,
     ...fileLinesFor(''),
   ];
   if (common.length > 0) {
     lines.push('通用规则清单:');
-    common.forEach((text, index) => lines.push(`  ${index + 1}. ${text}`));
+    common.forEach((text2, index) => lines.push(`  ${index + 1}. ${commonRuleFlags[index] === false ? '[停用] ' : ''}${text2}`));
   }
   if (own.length > 0) {
     lines.push('本会话专属规则清单:');
-    own.forEach((text, index) => lines.push(`  ${index + 1}. ${text}`));
+    own.forEach((text2, index) => lines.push(`  ${index + 1}. ${ownFlags[index] === false ? '[停用] ' : ''}${text2}`));
   }
   if (text.length > 0) {
     lines.push('实际注入（每次快照变化才重新追加一次）:');
@@ -809,15 +906,17 @@ function statusText(sessionId) {
 const HELP = [
   '/fence                      显示状态',
   '/fence on | off             启用 / 停用本会话专属规则',
-  '/fence add <规则文本>       新建一条本会话专属规则',
+  '/fence on <序号> | off <序号>  单独启用 / 停用第 N 条本会话专属规则',
+  '/fence add <规则文本>       新建一条本会话专属规则（默认启用）',
   '/fence rm <序号>            删除第 N 条本会话专属规则',
   '/fence clear                清空本会话专属规则',
   '/fence reset                清空本会话规则并删除开关登记',
   '/fence dir                  显示围栏文件路径',
   '',
   '/fence all                  显示通用规则（对每个对话都生效）',
-  '/fence all add <规则文本>   新建一条通用规则',
+  '/fence all add <规则文本>   新建一条通用规则（默认启用）',
   '/fence all rm <序号>        删除第 N 条通用规则',
+  '/fence all on <序号> | off <序号>  单独启用 / 停用第 N 条通用规则',
   '/fence all clear            清空通用规则',
   '',
   '/fence switch on | off      总开关（关掉后所有对话都不注入）',
@@ -853,6 +952,8 @@ function handleFenceCommon(argument) {
 
   const fence = loadFence();
   const list = commonRules(fence);
+  if (!Array.isArray(fence.ruleEnabled)) fence.ruleEnabled = [];
+  const flags = alignFlagsInPlace(fence.ruleEnabled, list.length);
 
   if (verb === 'add') {
     if (text.length === 0) return fail('/fence all add 需要规则文本');
@@ -860,6 +961,7 @@ function handleFenceCommon(argument) {
     if (list.some((existing) => existing === text)) return succeed(`该通用规则已存在，未重复添加。\n${commonStatusText()}`);
     if (list.length >= MAX_RULES) return fail(`通用规则已达上限 ${MAX_RULES} 条`);
     list.push(text);
+    flags.push(true);
     saveFence(fence);
     return succeed(`已添加通用规则（第 ${list.length} 条）\n${commonStatusText()}`);
   }
@@ -868,13 +970,24 @@ function handleFenceCommon(argument) {
     const index = Number.parseInt(text, 10);
     if (!Number.isInteger(index) || index < 1 || index > list.length) return fail(`/fence all rm 需要 1..${list.length} 之间的序号`);
     const removed = list.splice(index - 1, 1)[0];
+    flags.splice(index - 1, 1);
     saveFence(fence);
     return succeed(`已删除通用规则: ${removed}\n${commonStatusText()}`);
+  }
+
+  // 单条启停：/fence all off <序号> 暂时停用，on <序号> 恢复。
+  if (verb === 'off' || verb === 'on') {
+    const index = Number.parseInt(text, 10);
+    if (!Number.isInteger(index) || index < 1 || index > list.length) return fail(`/fence all ${verb} 需要 1..${list.length} 之间的序号`);
+    flags[index - 1] = verb === 'on';
+    saveFence(fence);
+    return succeed(`已${verb === 'on' ? '启用' : '停用'}第 ${index} 条通用规则\n${commonStatusText()}`);
   }
 
   if (verb === 'clear') {
     const removed = list.length;
     fence.rules = [];
+    fence.ruleEnabled = [];
     saveFence(fence);
     return succeed(`已清空 ${removed} 条通用规则。\n${commonStatusText()}`);
   }
@@ -885,14 +998,16 @@ function handleFenceCommon(argument) {
 function commonStatusText() {
   const fence = loadFence();
   const rules = commonRules(fence);
-  const text = fence.enabled === true ? renderRuleTexts(rules) : '';
+  const flags = commonFlags(fence);
+  const text = fence.enabled === true ? renderRuleTexts(pickEnabled(rules, flags)) : '';
+  const active = pickEnabled(rules, flags).length;
   const lines = [
     '/fence all — 通用规则（对每个对话都生效）',
     `总开关: ${fence.enabled === true ? '开' : '关（所有对话都不注入）'}`,
-    `规则: ${rules.length} 条，注入文本 ${text.length} 字符 ≈ ${tokenEstimate(text)} token`,
+    `规则: ${rules.length} 条（启用 ${active} 条），注入文本 ${text.length} 字符 ≈ ${tokenEstimate(text)} token`,
     ...fileLinesFor(''),
   ];
-  rules.forEach((rule, index) => lines.push(`  ${index + 1}. ${rule}`));
+  rules.forEach((rule, index) => lines.push(`  ${index + 1}. ${flags[index] === false ? '[停用] ' : ''}${rule}`));
   return lines.join('\n');
 }
 
@@ -937,6 +1052,17 @@ function handleFence(invocation) {
   if (verb === 'dir') return succeed(fileLinesFor('').join('\n'));
 
   if (verb === 'on' || verb === 'off') {
+    // 带序号 = 单条规则启停；不带序号 = 整个会话专属规则启停（老语义，保持不变）。
+    const target = Number.parseInt(argument, 10);
+    if (Number.isInteger(target)) {
+      const ownList = sessionRules(fence, sessionId);
+      if (target < 1 || target > ownList.length) return fail(`/fence ${verb} 需要 1..${ownList.length} 之间的序号`);
+      const entry = sessionEntry(fence, sessionId);
+      const ownFlags = alignFlagsInPlace(entry.ruleEnabled, entry.rules.length);
+      ownFlags[target - 1] = verb === 'on';
+      saveFence(fence);
+      return succeed(`已${verb === 'on' ? '启用' : '停用'}第 ${target} 条本会话专属规则\n${statusText(sessionId)}`);
+    }
     sessionEntry(fence, sessionId).enabled = verb === 'on';
     saveFence(fence);
     return succeed(statusText(sessionId));
@@ -949,8 +1075,12 @@ function handleFence(invocation) {
     if (argument.length > MAX_RULE_CHARS) return fail(`单条规则最多 ${MAX_RULE_CHARS} 字符（当前 ${argument.length}）`);
     if (own.some((existing) => existing === argument)) return succeed(`该规则已存在，未重复添加。\n${statusText(sessionId)}`);
     if (own.length >= MAX_RULES) return fail(`规则已达上限 ${MAX_RULES} 条，请先 /fence rm <序号>`);
-    sessionEntry(fence, sessionId).rules.push(argument);
-    sessionEntry(fence, sessionId).enabled = true;
+    const entry = sessionEntry(fence, sessionId);
+    entry.ruleEnabled = alignFlagsInPlace(entry.ruleEnabled, entry.rules.length);
+    entry.rules.push(argument);
+    // 新规则默认启用 ——「配置以后就能用」，不用再手动打开。
+    entry.ruleEnabled.push(true);
+    entry.enabled = true;
     saveFence(fence);
     return succeed(`已添加本会话专属规则（第 ${own.length + 1} 条）\n${statusText(sessionId)}`);
   }
@@ -958,14 +1088,20 @@ function handleFence(invocation) {
   if (verb === 'rm' || verb === 'remove' || verb === 'del') {
     const index = Number.parseInt(argument, 10);
     if (!Number.isInteger(index) || index < 1 || index > own.length) return fail(`/fence rm 需要 1..${own.length} 之间的序号`);
-    const removed = own.splice(index - 1, 1)[0];
+    const entry = sessionEntry(fence, sessionId);
+    const flags = alignFlagsInPlace(entry.ruleEnabled, entry.rules.length);
+    const removed = entry.rules.splice(index - 1, 1)[0];
+    // 启停位跟着规则一起删，否则后面每条都会错位。
+    flags.splice(index - 1, 1);
     saveFence(fence);
     return succeed(`已删除: ${removed}\n${statusText(sessionId)}`);
   }
 
   if (verb === 'clear') {
     const removed = own.length;
-    sessionEntry(fence, sessionId).rules = [];
+    const entry = sessionEntry(fence, sessionId);
+    entry.rules = [];
+    entry.ruleEnabled = [];
     saveFence(fence);
     return succeed(`已删除 ${removed} 条本会话专属规则。\n${statusText(sessionId)}`);
   }
