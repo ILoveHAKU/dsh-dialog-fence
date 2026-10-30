@@ -45,15 +45,18 @@ message is appended — never a prefix rewritten. The snapshot header makes bill
 
 **Where you edit it.** A Settings menu entry, the bundle's own page under Plugins → Installed, the legacy
 Plugins → Built-in tab, and a floating panel in the conversation's header — five surfaces, one component,
-one JSON file, no state fork. The panel closes when you click outside it.
+one JSON file, no state fork. The panel closes when you click outside it. Since `0.13.0` every single rule
+also carries its own on/off switch, so one rule can be paused without deleting it; a newly added rule starts
+enabled, and paused rules take no number in the rendered list.
 
 **Install.** Through the official installer (`Plugins → Add plugin`, give it the package path or
 `github:ILoveHAKU/dsh-dialog-fence`), or `dsh plugin --profile <name> add <spec>`. A `file:///` mount via
 `scripts/install.mjs` also works for development but does not show up under Installed.
 
-**Tests.** Six zero-dependency suites: `smoke` (host logic), `route` (HTTP API), `client` (bundle shape),
-`render` (real React first frame), `opensource` (pre-publication leak scan), `docs` (this bilingual rule).
-`npm test` runs them in order. None of them touch your live rules file.
+**Tests.** Eight zero-dependency suites: `smoke` (host logic), `route` (HTTP API), `ruletoggle` (per-rule
+switches), `client` (bundle shape), `render` (real React first frame), `opensource` (pre-publication leak
+scan), `release` (publish channel), `docs` (this bilingual rule). `npm test` runs them in order. None of them
+touch your live rules file.
 
 **Docs.** [Design & implementation](docs/设计与实施方案.md) covers the mechanism and the rejected
 alternatives; the [operations manual](docs/运维手册与变更记录.md) covers day-to-day use, how to change
@@ -206,7 +209,9 @@ node scripts/install.mjs uninstall
 
 ```bash
 # 1) 无宿主测试（语法 + 行为，不会碰线上规则目录）
-node test/smoke.mjs && node test/route.mjs && node test/client.mjs && node test/render.mjs && node test/opensource.mjs
+npm test
+# 或者只洗手动指定的那几套
+node test/smoke.mjs && node test/route.mjs && node test/ruletoggle.mjs && node test/client.mjs
 
 # 2) 重启后在任意会话里
 /fence status
@@ -233,7 +238,7 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 
 重启后：
 
-- **设置左栏 → 「对话围栏」**：主入口，直接编辑**通用规则**（对每个对话生效）。每条占一行：序号 + 正文 + 「改」「删」；点「改」就地变成**多行编辑框**（0.9.0 起，可换行），`Ctrl+Enter` 保存 / `Esc` 取消。底部编辑框新建一条，另有「清空全部」，右侧实时显示 `注入 N 字符 ≈ M token`。顶部还有 **「打开文件夹」** 与 **「更改位置」**。下半部分还有 **「某个对话的额外规则」**：下拉里按名字选对话（默认已选中当前对话），下面就是那个对话的专属规则列表与新建框 —— 和浮层下半部分是同一份数据、同一套操作（0.10.0 起）。这一块是**两行**：第一行「对话」+ 下拉，第二行「停用/启用该对话」按钮 + `N/40 条专属规则` 计数（0.12.1 起，此前挤在一行会把中文压成逐字换行）。
+- **设置左栏 → 「对话围栏」**：主入口，直接编辑**通用规则**（对每个对话生效）。每条占一行：序号 + 正文 + 「改」「删」 + **启停滑块（贴在最右端）**；点「改」就地变成**多行编辑框**（0.9.0 起，可换行），`Ctrl+Enter` 保存 / `Esc` 取消。底部编辑框新建一条，另有「清空全部」，右侧实时显示 `注入 N 字符 ≈ M token`。顶部还有 **「打开文件夹」** 与 **「更改位置」**。下半部分还有 **「某个对话的额外规则」**：下拉里按名字选对话（默认已选中当前对话），下面就是那个对话的专属规则列表与新建框 —— 和浮层下半部分是同一份数据、同一套操作（0.10.0 起）。这一块是**两行**：第一行「对话」+ 下拉，第二行「停用/启用该对话」按钮 + `N/40 条专属规则` 计数（0.12.1 起，此前挤在一行会把中文压成逐字换行）。
 - **会话右上角**出现「围栏」按钮，数字是**真实注入条数**（通用 + 本对话专属；高亮 = 已启用）。点开浮层，里面渲染的就是**设置页那四张卡片**（紧凑版式），只是外面套了一层标题栏与「关闭」；下拉默认停在「点开它的这条对话」上，所以浮层里同样能给任意一条对话配专属规则（0.12.0 起）。**点浮层外部任意位置即可关闭**（0.10.0 起）。
 - 两处都能**单独停用某一条对话的围栏**（设置页的下拉旁也有「停用该对话 / 启用该对话」，0.12.0 起此前只有浮层有）。
 - 所有改动**下一轮生效**，无需重启。
@@ -248,6 +253,9 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 
 - **总开关**（关掉后所有对话立即零注入，规则文件原封不动）
 - 通用规则的**完整可视编辑**（新增 / 改 / 删 / 清空）
+- **每条规则一个独立的启停滑块**（0.13.0 起）：点一下就把那一条暂时停用 / 恢复启用，
+  停用期间它不参与注入、编号也不占位；新加的规则**默认就是启用的**，不用再手动打开。
+  滑块固定在规则行的**最右端**（序号 → 正文 → 改 / 删 → 滑块），不挡正文的视线。
 - **某个对话的专属规则**的完整可视编辑：下拉选对话 → 该对话的规则逐条「改」「删」→ 底部新建框 → 「添加专属规则」/「清空该对话的专属规则」（0.10.0 起，与浮层下半部分一致）
 - **围栏文件当前的绝对路径** + 「打开文件夹」按钮（在资源管理器里选中它）
 - **「更改位置」**：填一个新的绝对路径（或以 `.json` 结尾的目录）即可把围栏文件搬过去；随后原目录留一个 `location.json` 指针，删掉它就回到默认位置
@@ -259,8 +267,8 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 | 命令 | 作用 |
 |---|---|
 | `/fence` | 查看状态（启用与否、条数、实际注入文本、token 估算、围栏文件路径） |
-| `/fence on` / `/fence off` | 启用 / 停用本会话的专属规则（不影响通用规则） |
-| `/fence add <规则文本>` | 追加一条**本会话**专属规则（自动启用；重复文本不会重复添加） |
+| `/fence on` / `/fence off` | 启用 / 停用本会话的专属规则（不影响通用规则）；**后面跟序号则只操作那一条**（`/fence off 2` = 停用第 2 条，0.13.0 起） |
+| `/fence add <规则文本>` | 追加一条**本会话**专属规则（默认启用；重复文本不会重复添加） |
 | `/fence rm <序号>` | 删除本会话第 N 条 |
 | `/fence clear` | 清空本会话规则（保留启用状态） |
 | `/fence reset` | 彻底删除本会话记录（等于从未配置过） |
@@ -269,8 +277,9 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 | `/fence file <绝对路径>` | **更改围栏文件位置**（现有规则一起搬过去） |
 | `/fence switch on` / `switch off` | 通用总开关 |
 | **`/fence all`** | 查看**通用规则**（对每个对话都生效） |
-| **`/fence all add <规则文本>`** | 追加一条通用规则 |
+| **`/fence all add <规则文本>`** | 追加一条通用规则（默认启用） |
 | **`/fence all rm <序号>`** | 删除第 N 条通用规则 |
+| **`/fence all on <序号>` / `all off <序号>`** | 启用 / 停用第 N 条**通用规则**（0.13.0 起） |
 | **`/fence all clear`** | 清空通用规则 |
 | `/fence help` | 帮助 |
 
@@ -286,19 +295,26 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
     "结论必须给出可复现证据（命令 / 文件:行号 / 实测输出三者至少其一）；给不出就明说「未验证」。",
     "改文件前先读该文件；改配置或数据前先备份，并给出精确回滚路径。"
   ],
+  "ruleEnabled": [true, false],          // 与 rules 等长：false = 那一条暂时停用（0.13.0 起）
   "sessions": {                          // 会话专属规则：只叠加到该会话
     "session-<uuid>": {
       "enabled": true,
-      "rules": ["本对话额外的一条规则"]
+      "rules": ["本对话额外的一条规则"],
+      "ruleEnabled": [true]
     }
   }
 }
 ```
 
+`ruleEnabled` 是**可选的**：不写、写短了、整段删掉都等于「全部启用」，老文件直接拿来用即可。
+它与 `rules` 一一对应（同位下标），删掉某条规则时这一位会被同步删掉，不会错位。
+面板里的滑块、`/fence off <序号>`、HTTP 的 `toggleRule` 动作改的都是这个字段。
+
 注入顺序：先 `rules` 数组 1..N，再把该会话启用的 `sessions.<id>.rules` 接在后面编号。总开关 `enabled: false` 时两层一起静音。
 
 - **直接改 `rules` 数组** → 所有对话下一轮生效（包括新开的），无需任何开关登记。
 - **直接改 `sessions.<id>.rules`** → 该会话自动启用并生效（即使没写 `enabled`）。
+- **`ruleEnabled` 里标 `false`** → 那一条不参与注入，且不占编号（0.13.0 起）；不写这个字段 = 全部启用。
 - **手改坏了 JSON** → 不抛异常、不清空文件，本轮降级为零注入，控制台留一条 warn。修好文件即恢复。
 - **上限**：每层最多 40 条；渲染总上限 2400 字符；单条上限 2000 字符。
 
@@ -353,7 +369,7 @@ dialog-fence/
 ├── package.json        dsh.bundle.patch / dsh.client / icon 声明
 ├── cordis.patch.yml    bundle 安装层（方式 A 用）
 ├── scripts/install.mjs 一键安装器（方式 B 用，同时支持 dsh 与 DSH Desktop）
-├── test/               smoke（宿主逻辑）/ route（HTTP API）/ client（bundle 形态）/ render（真 React 首帧）/ opensource（泄漏扫描）
+├── test/               smoke（宿主逻辑）/ route（HTTP API）/ ruletoggle（单条启停）/ client（bundle 形态）/ render（真 React 首帧）/ opensource（泄漏扫描）/ release（发布通道）/ docs（双语文案）
 ├── .github/            CI（test.yml）+ 自动分流（triage.yml）+ issue/PR 模板 + SECURITY.md
 └── docs/               设计与实施方案、运维手册与变更记录
 ```
@@ -365,7 +381,8 @@ dialog-fence/
 本包**零运行时依赖**：宿主半边只用 `process.getBuiltinModule('node:fs' | 'node:path' | 'node:child_process')`，浏览器半边只 `require('react')`（由 DSH 宿主提供）。所以没有 `node_modules` 要装，也没有 lockfile。
 
 ```bash
-npm test            # 按顺序跑五套测试，任一失败即非零退出
+npm test            # 按顺序跑八套测试，任一失败即非零退出
+npm run test:ruletoggle   # 只跑「每条规则单独启停」那一套
 npm run test:opensource   # 只跑泄漏扫描（见下）
 ```
 
@@ -373,9 +390,12 @@ npm run test:opensource   # 只跑泄漏扫描（见下）
 |---|---|---|
 | `test/smoke.mjs` | 宿主逻辑：围栏文件解析/原子写、规则增删改、多行文本往返、上限与截断 | 不需要 |
 | `test/route.mjs` | HTTP 路由：`/api/dialog-fence` 的 GET/POST、各 action、错误码 | 不需要 |
+| `test/ruletoggle.mjs` | 单条规则的启用位：默认启用、停用后不注入且编号连续、落盘格式、删除时平移、老文件兼容（0.13.0 起） | 不需要 |
 | `test/client.mjs` | `client.js` 的 bundle 形态：懒 CJS 工厂、槽位注册、源码级断言 | 不需要 |
 | `test/render.mjs` | 用**真 React** 做服务端首帧渲染（`renderToStaticMarkup`），断言面板/设置页的 DOM | **需要本机的 DSH 安装**（找不到就打印 SKIP 并以 0 退出） |
 | `test/opensource.mjs` | 开源前泄漏扫描：真实姓名（含裸名）/姓氏形态/hostname/内部编号/真实 session id/绝对用户路径，**文件与 commit message 都扫** | 不需要 |
+| `test/release.mjs` | 发布通道静态检查：workflow 触发条件、机密注入红线、`files` 白名单不含本机数据 | 不需要 |
+| `test/docs.mjs` | 中英双语规则：`description`、README 每个一/二/三级标题中英并列、开头摘要分中英、`docs/` 结构 | 不需要 |
 
 `test/render.mjs` 按下面的顺序找 React，找不到就 SKIP：
 
