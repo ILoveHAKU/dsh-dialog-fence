@@ -47,7 +47,10 @@ message is appended — never a prefix rewritten. The snapshot header makes bill
 Plugins → Built-in tab, and a floating panel in the conversation's header — five surfaces, one component,
 one JSON file, no state fork. The panel closes when you click outside it. Since `0.13.0` every single rule
 also carries its own on/off switch, so one rule can be paused without deleting it; a newly added rule starts
-enabled, and paused rules take no number in the rendered list.
+enabled, and paused rules take no number in the rendered list. Since `0.14.0` you can additionally tick any
+number of conversations in an exclusion list: those conversations skip the fence entirely — shared and
+per-session rules alike — while their rules stay in the file and come back the moment you untick them
+(nothing is ticked by default, so every conversation keeps using the fence).
 
 **Install.** Through the official installer (`Plugins → Add plugin`, give it the package path or
 `github:ILoveHAKU/dsh-dialog-fence`), or `dsh plugin --profile <name> add <spec>`. A `file:///` mount via
@@ -257,6 +260,10 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
   停用期间它不参与注入、编号也不占位；新加的规则**默认就是启用的**，不用再手动打开。
   滑块固定在规则行的**最右端**（序号 → 正文 → 改 / 删 → 滑块），不挡正文的视线。
 - **某个对话的专属规则**的完整可视编辑：下拉选对话 → 该对话的规则逐条「改」「删」→ 底部新建框 → 「添加专属规则」/「清空该对话的专属规则」（0.10.0 起，与浮层下半部分一致）
+- **「不使用围栏规则的对话」多选名单**（0.14.0 起）：勾上的对话**整段跳过围栏** —— 通用规则和专属规则都不注入，
+  但它已配置的规则一条不删，取消勾选立刻原样恢复。默认一条都不勾（= 所有对话都使用围栏）。
+  另有「全部不使用围栏」与「恢复全部使用围栏」两个一键动作。名单是一列可滚动的复选行，名字单行省略，
+  勾再多条也只会让这一列自己纵向变长，不会把旁边的按钮或上面几张卡片挤变形。
 - **围栏文件当前的绝对路径** + 「打开文件夹」按钮（在资源管理器里选中它）
 - **「更改位置」**：填一个新的绝对路径（或以 `.json` 结尾的目录）即可把围栏文件搬过去；随后原目录留一个 `location.json` 指针，删掉它就回到默认位置
 
@@ -273,6 +280,8 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 | `/fence clear` | 清空本会话规则（保留启用状态） |
 | `/fence reset` | 彻底删除本会话记录（等于从未配置过） |
 | `/fence dir` | 打印围栏文件路径（含位置指针） |
+| `/fence mute` / `/fence unmute` | 让**本会话**整段不使用围栏（通用 + 专属都不注入）/ 恢复使用（0.14.0 起）；后面跟会话 id 则操作那一个 |
+| `/fence muted` | 列出所有「不使用围栏」的会话（0.14.0 起） |
 | `/fence open` | 在资源管理器里打开并选中围栏文件 |
 | `/fence file <绝对路径>` | **更改围栏文件位置**（现有规则一起搬过去） |
 | `/fence switch on` / `switch off` | 通用总开关 |
@@ -296,6 +305,7 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
     "改文件前先读该文件；改配置或数据前先备份，并给出精确回滚路径。"
   ],
   "ruleEnabled": [true, false],          // 与 rules 等长：false = 那一条暂时停用（0.13.0 起）
+  "mutedSessions": ["session-<uuid>"],   // 这些对话整段不使用围栏（0.14.0 起）；空数组 = 全都使用
   "sessions": {                          // 会话专属规则：只叠加到该会话
     "session-<uuid>": {
       "enabled": true,
@@ -310,11 +320,19 @@ Dialog fence (user-set rules binding this conversation; a newer direct user inst
 它与 `rules` 一一对应（同位下标），删掉某条规则时这一位会被同步删掉，不会错位。
 面板里的滑块、`/fence off <序号>`、HTTP 的 `toggleRule` 动作改的都是这个字段。
 
+`mutedSessions` 也是**可选的**：不写 / 空数组 = 所有对话都使用围栏（默认行为，与 0.13.x 完全一致）。
+名单里的会话 **通用规则与专属规则都不注入**，而它自己的 `sessions.<id>.rules` 一条都不会被删 ——
+取消豁免立刻原样恢复。列表里的 id 一律会被消毒（只保留字母数字与 `-_.`）、去重、排序，
+所以同一组多选无论勾选顺序如何，落盘内容都一样。面板的多选区、`/fence mute`、
+HTTP 的 `mute` 动作（`{action:'mute', sessions:[...], muted:true|false}`，一次可传多个）改的都是这个字段。
+
 注入顺序：先 `rules` 数组 1..N，再把该会话启用的 `sessions.<id>.rules` 接在后面编号。总开关 `enabled: false` 时两层一起静音。
+会话被列进 `mutedSessions` 时，两层对这一条对话一起静音（等同于「这条对话没有围栏」）。
 
 - **直接改 `rules` 数组** → 所有对话下一轮生效（包括新开的），无需任何开关登记。
 - **直接改 `sessions.<id>.rules`** → 该会话自动启用并生效（即使没写 `enabled`）。
 - **`ruleEnabled` 里标 `false`** → 那一条不参与注入，且不占编号（0.13.0 起）；不写这个字段 = 全部启用。
+- **`mutedSessions` 里出现该会话 id** → 这条对话整段零注入（0.14.0 起）；不写这个字段 = 全都使用围栏。
 - **手改坏了 JSON** → 不抛异常、不清空文件，本轮降级为零注入，控制台留一条 warn。修好文件即恢复。
 - **上限**：每层最多 40 条；渲染总上限 2400 字符；单条上限 2000 字符。
 
@@ -369,7 +387,7 @@ dialog-fence/
 ├── package.json        dsh.bundle.patch / dsh.client / icon 声明
 ├── cordis.patch.yml    bundle 安装层（方式 A 用）
 ├── scripts/install.mjs 一键安装器（方式 B 用，同时支持 dsh 与 DSH Desktop）
-├── test/               smoke（宿主逻辑）/ route（HTTP API）/ ruletoggle（单条启停）/ client（bundle 形态）/ render（真 React 首帧）/ opensource（泄漏扫描）/ release（发布通道）/ docs（双语文案）
+├── test/               smoke（宿主逻辑）/ route（HTTP API）/ ruletoggle（单条启停）/ sessionmute（整条对话豁免）/ client（bundle 形态）/ render（真 React 首帧）/ opensource（泄漏扫描）/ release（发布通道）/ docs（双语文案）
 ├── .github/            CI（test.yml）+ 自动分流（triage.yml）+ issue/PR 模板 + SECURITY.md
 └── docs/               设计与实施方案、运维手册与变更记录
 ```
@@ -381,8 +399,9 @@ dialog-fence/
 本包**零运行时依赖**：宿主半边只用 `process.getBuiltinModule('node:fs' | 'node:path' | 'node:child_process')`，浏览器半边只 `require('react')`（由 DSH 宿主提供）。所以没有 `node_modules` 要装，也没有 lockfile。
 
 ```bash
-npm test            # 按顺序跑八套测试，任一失败即非零退出
+npm test            # 按顺序跑九套测试，任一失败即非零退出
 npm run test:ruletoggle   # 只跑「每条规则单独启停」那一套
+npm run test:sessionmute  # 只跑「整条对话不使用围栏」那一套
 npm run test:opensource   # 只跑泄漏扫描（见下）
 ```
 
@@ -391,6 +410,7 @@ npm run test:opensource   # 只跑泄漏扫描（见下）
 | `test/smoke.mjs` | 宿主逻辑：围栏文件解析/原子写、规则增删改、多行文本往返、上限与截断 | 不需要 |
 | `test/route.mjs` | HTTP 路由：`/api/dialog-fence` 的 GET/POST、各 action、错误码 | 不需要 |
 | `test/ruletoggle.mjs` | 单条规则的启用位：默认启用、停用后不注入且编号连续、落盘格式、删除时平移、老文件兼容（0.13.0 起） | 不需要 |
+| `test/sessionmute.mjs` | 整条对话不使用围栏：`mutedSessions` 落盘形状、多选一次提交、通用层与专属层一起静音、取消即恢复、脏 id 消毒、老文件兼容（0.14.0 起） | 不需要 |
 | `test/client.mjs` | `client.js` 的 bundle 形态：懒 CJS 工厂、槽位注册、源码级断言 | 不需要 |
 | `test/render.mjs` | 用**真 React** 做服务端首帧渲染（`renderToStaticMarkup`），断言面板/设置页的 DOM | **需要本机的 DSH 安装**（找不到就打印 SKIP 并以 0 退出） |
 | `test/opensource.mjs` | 开源前泄漏扫描：真实姓名（含裸名）/姓氏形态/hostname/内部编号/真实 session id/绝对用户路径，**文件与 commit message 都扫** | 不需要 |
