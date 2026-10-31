@@ -166,7 +166,7 @@ window.__ModuleLoader__.load({
       return '已打开围栏文件夹';
     }
 
-    /** 提交一个动作（toggle / toggleGlobal / add / update / remove / clear / reset / setFile / openFolder）。 */
+    /** 提交一个动作（toggle / toggleGlobal / mute / add / update / remove / clear / reset / setFile / openFolder）。 */
     async function act(sessionId, action, payload) {
       patch({ busy: true });
       try {
@@ -177,8 +177,8 @@ window.__ModuleLoader__.load({
           await refreshAll();
           return snapshot;
         }
-        if (action === 'toggleGlobal' || action === 'setFile') {
-          // 这两个动作返回的是概览，且会影响「围栏文件在哪 / 总开关」这类全局信息。
+        if (action === 'toggleGlobal' || action === 'setFile' || action === 'mute') {
+          // 这三个动作返回的都是概览，且会影响「围栏文件在哪 / 总开关 / 豁免名单」这类全局信息。
           patch({ overview: snapshot, busy: false, error: null, notice: null });
           await refreshAll();
           return snapshot;
@@ -333,6 +333,28 @@ window.__ModuleLoader__.load({
       'font-size:12px;line-height:1.5}',
       '.dialog-fence-label{flex:none;white-space:nowrap;color:var(--dsw-alias-label-tertiary);',
       'font-size:12px;line-height:1.5}',
+      // 豁免名单（用户 CR-22）：可以一次勾多个对话，让它们完全不用围栏规则。
+      // 布局纪律：这里**不复用 picker-row**（render 测试钉死 picker-row 恰好 2 个），
+      // 并且名字用 flex:1 + min-width:0 + 省略号，勾多少条都只会让名单自己纵向变长，
+      // 绝不会把同行的按钮或其它卡片挤出去（CR-19 的教训）。
+      '.dialog-fence-mute-list{display:flex;flex-direction:column;gap:4px;max-height:180px;overflow:auto}',
+      '.dialog-fence-mute-row{display:flex;align-items:center;gap:8px;min-width:0;padding:4px 8px;',
+      'border-radius:7px;background:var(--dsw-alias-bg-layer-2);cursor:pointer}',
+      '.dialog-fence-mute-row:hover{background:var(--dsw-alias-bg-layer-3)}',
+      '.dialog-fence-mute-box{flex:none;position:relative;width:14px;height:14px;padding:0;border-radius:4px;',
+      'border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);cursor:pointer}',
+      '.dialog-fence-mute-box[data-on="true"]{background:var(--dsw-alias-brand-primary);',
+      'border-color:var(--dsw-alias-brand-primary)}',
+      '.dialog-fence-mute-box[data-on="true"]::after{content:"";position:absolute;left:3px;top:0;',
+      'width:4px;height:8px;border:solid #fff;border-width:0 1.5px 1.5px 0;transform:rotate(45deg)}',
+      '.dialog-fence-mute-box[disabled]{opacity:.5;cursor:default}',
+      // 名字是唯一被允许收缩的元素：超长时用省略号，绝不换行撑高、也不挤压右边的标记。
+      '.dialog-fence-mute-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;',
+      'white-space:nowrap;font-size:12px;line-height:1.5}',
+      '.dialog-fence-mute-tag{flex:none;white-space:nowrap;font-size:11px;line-height:1.5;',
+      'color:var(--dsw-alias-brand-text)}',
+      '.dialog-fence-mute-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      '.dialog-fence-mute-tools > .dialog-fence-btn{flex:none;white-space:nowrap}',
     ].join('');
 
     const TAG_ID = `${NS}/client.css`;
@@ -665,6 +687,31 @@ window.__ModuleLoader__.load({
       const targetEntry = targetSession === '' ? undefined : entryOf(targetSession);
       const targetRules = targetEntry?.rules ?? [];
 
+      // 豁免名单（CR-22）：哪些对话完全不用围栏规则。多选，默认空 = 全都用。
+      const mutedList = Array.isArray(overview?.mutedSessions) ? overview.mutedSessions : [];
+      const mutedSet = new Set(mutedList);
+      // 候选 = 下拉里那些 + 名单里已有但当前不在下拉里的（例如归档后规则被清掉的对话）。
+      const muteChoices = [...choices];
+      const knownIds = new Set(muteChoices.map((row) => row.id));
+      for (const id of mutedList) {
+        if (knownIds.has(id)) continue;
+        knownIds.add(id);
+        muteChoices.push({ id, label: `已豁免对话 ${muteChoices.length + 1}` });
+      }
+      const toggleMute = (id, nextMuted) => {
+        if (id === '') return;
+        act(undefined, 'mute', { sessions: [id], muted: nextMuted });
+      };
+      const muteAll = () => {
+        const ids = muteChoices.map((row) => row.id);
+        if (ids.length === 0) return;
+        act(undefined, 'mute', { sessions: ids, muted: true });
+      };
+      const unmuteAll = () => {
+        if (mutedList.length === 0) return;
+        act(undefined, 'mute', { sessions: mutedList, muted: false });
+      };
+
       const add = () => {
         const text = draft.trim();
         if (text.length === 0) return;
@@ -956,7 +1003,73 @@ window.__ModuleLoader__.load({
               ),
         ),
 
-        // ---- 卡片 4：注入路径说明 ----
+        // ---- 卡片 4：不使用围栏的对话（豁免名单，可多选） ----
+        react.createElement(
+          'div',
+          { className: 'dialog-fence-card' },
+          react.createElement(
+            'div',
+            { className: 'dialog-fence-card-head' },
+            react.createElement('span', { className: 'dialog-fence-card-title' }, '不使用围栏规则的对话（可选）'),
+            react.createElement(
+              'span',
+              { className: 'dialog-fence-count' },
+              mutedList.length === 0 ? '当前：全部对话都使用围栏' : `当前：${mutedList.length} 个对话不使用围栏`,
+            ),
+          ),
+          react.createElement(
+            'div',
+            { className: 'dialog-fence-meta' },
+            '勾选的对话会完全跳过围栏：通用规则和专属规则都不注入，规则本身不会被删掉，取消勾选后原样恢复。默认全都不勾（也就是所有对话都使用围栏）。',
+          ),
+          muteChoices.length === 0
+            ? react.createElement(
+                'div',
+                { className: 'dialog-fence-empty' },
+                overview === null && sessionById === undefined ? '读取中…' : '还没有可选的对话。',
+              )
+            : react.createElement(
+                'div',
+                { className: 'dialog-fence-mute-list' },
+                muteChoices.map((row) => {
+                  const checked = mutedSet.has(row.id);
+                  return react.createElement(
+                    'div',
+                    { key: `mute-${row.id}`, className: 'dialog-fence-mute-row' },
+                    react.createElement('button', {
+                      type: 'button',
+                      className: 'dialog-fence-mute-box',
+                      'data-on': checked ? 'true' : 'false',
+                      role: 'checkbox',
+                      'aria-checked': checked ? 'true' : 'false',
+                      'aria-label': checked ? `让 ${row.label} 重新使用围栏` : `让 ${row.label} 不使用围栏`,
+                      title: checked ? '已豁免，点击恢复使用围栏' : '点击让这个对话不使用围栏',
+                      disabled: busy,
+                      onClick: () => toggleMute(row.id, !checked),
+                    }),
+                    // 名字是唯一允许收缩的元素：超长省略，绝不把右边的标记挤出去。
+                    react.createElement('span', { className: 'dialog-fence-mute-name', title: row.label }, row.label),
+                    checked ? react.createElement('span', { className: 'dialog-fence-mute-tag' }, '不使用围栏') : null,
+                  );
+                }),
+              ),
+          react.createElement(
+            'div',
+            { className: 'dialog-fence-mute-tools' },
+            react.createElement(
+              'button',
+              { type: 'button', className: 'dialog-fence-btn', disabled: busy || muteChoices.length === 0, onClick: muteAll },
+              '全部不使用围栏',
+            ),
+            react.createElement(
+              'button',
+              { type: 'button', className: 'dialog-fence-btn', disabled: busy || mutedList.length === 0, onClick: unmuteAll },
+              '恢复全部使用围栏',
+            ),
+          ),
+        ),
+
+        // ---- 卡片 5：注入路径说明 ----
         react.createElement(
           'div',
           { className: 'dialog-fence-card' },

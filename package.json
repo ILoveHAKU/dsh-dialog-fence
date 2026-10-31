@@ -1,7 +1,7 @@
 {
   "name": "dsh-dialog-fence",
-  "version": "0.13.0",
-  "description": "对话围栏：一套对所有对话生效的通用规则 + 可选的按对话追加的专属规则，全部存在一个位置可自定义的 JSON 文件里，以固定顺序注入运行时上下文快照（不破坏前缀缓存、纯追加、压缩后仍存活）。按标准 DSH bundle 安装，出现在「插件 → 已安装」，可用官方安装器装卸；规则可在设置页、包详情页与会话浮层里编辑。 / A dialogue fence: a shared rule list that applies to every conversation plus an optional per-session list, stored in one JSON file whose location is customizable, injected into the runtime-context snapshot at a fixed order (cache-safe, append-only, compression-durable). Installs as a normal DSH bundle, so it shows up under Plugins -> Installed and can be installed/removed with the official installer; rules are edited on the Settings page, in its own bundle page, and in the conversation panel.",
+  "version": "0.14.0",
+  "description": "对话围栏：一套对所有对话生效的通用规则 + 可选的按对话追加的专属规则，全部存在一个位置可自定义的 JSON 文件里，以固定顺序注入运行时上下文快照（不破坏前缀缓存、纯追加、压缩后仍存活）。每条规则右侧有独立开关可随时单独停用；还可以勾选「不使用围栏的对话」让若干对话整体跳过围栏（规则保留，取消勾选即恢复）。按标准 DSH bundle 安装，出现在「插件 → 已安装」，可用官方安装器装卸；规则可在设置页、包详情页与会话浮层里编辑。 / A dialogue fence: a shared rule list that applies to every conversation plus an optional per-session list, stored in one JSON file whose location is customizable, injected into the runtime-context snapshot at a fixed order (cache-safe, append-only, compression-durable). Every rule carries its own on/off switch, and a per-session exclusion list lets chosen conversations skip the fence entirely (their rules stay intact and come back when unchecked). Installs as a normal DSH bundle, so it shows up under Plugins -> Installed and can be installed/removed with the official installer; rules are edited on the Settings page, in its own bundle page, and in the conversation panel.",
   "type": "module",
   "main": "index.js",
   "icon": "./icon.svg",
@@ -40,8 +40,9 @@
     }
   },
   "scripts": {
-    "test": "node test/smoke.mjs && node test/route.mjs && node test/ruletoggle.mjs && node test/client.mjs && node test/render.mjs && node test/opensource.mjs && node test/release.mjs && node test/docs.mjs",
+    "test": "node test/smoke.mjs && node test/route.mjs && node test/ruletoggle.mjs && node test/sessionmute.mjs && node test/client.mjs && node test/render.mjs && node test/opensource.mjs && node test/release.mjs && node test/docs.mjs",
     "test:ruletoggle": "node test/ruletoggle.mjs",
+    "test:sessionmute": "node test/sessionmute.mjs",
     "test:opensource": "node test/opensource.mjs",
     "test:docs": "node test/docs.mjs",
     "install-plugin": "node scripts/install.mjs install",

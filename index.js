@@ -161,7 +161,8 @@ function emptyFence() {
   // ruleEnabled 与 rules 等长：true = 该条生效，false = 该条被临时停用。
   // 单独放一条并行数组而不是把 rules 改成对象，是为了让老文件、老前端、老命令
   // 全部零迁移继续工作（rules 永远是纯字符串数组）。
-  return { version: FENCE_VERSION, enabled: true, rules: [], ruleEnabled: [], sessions: {} };
+  // mutedSessions：整个会话不使用围栏规则的名单；缺字段 = 所有对话都使用（默认）。
+  return { version: FENCE_VERSION, enabled: true, rules: [], ruleEnabled: [], mutedSessions: [], sessions: {} };
 }
 
 /** 把任意「启停位」输入收敛成与规则等长的布尔数组；缺省 / 脏值一律视为启用。 */
@@ -197,11 +198,30 @@ function sanitizeSessionId(value) {
   return trimmed.replace(/[^A-Za-z0-9._-]/g, '_');
 }
 
+/**
+ * 收敛「不使用围栏的会话名单」：一律消毒、丢弃空串、去重、排序。
+ * 排序是为了让落盘 diff 稳定（同一组多选不会因为点击顺序不同产生不同文件内容）。
+ */
+function normalizeMutedSessions(value) {
+  const source = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  const list = [];
+  for (const entry of source) {
+    const safe = sanitizeSessionId(entry);
+    if (safe === '' || seen.has(safe)) continue;
+    seen.add(safe);
+    list.push(safe);
+  }
+  list.sort();
+  return list;
+}
+
 /** 把任意解析结果收敛成合法围栏对象；不认识的结构一律丢弃。 */
 function normalizeFence(parsed) {
   const fence = emptyFence();
   if (parsed === null || typeof parsed !== 'object') return fence;
   if (parsed.enabled === false) fence.enabled = false;
+  fence.mutedSessions = normalizeMutedSessions(parsed.mutedSessions);
   if (Array.isArray(parsed.rules)) {
     const flags = Array.isArray(parsed.ruleEnabled) ? parsed.ruleEnabled : [];
     for (const entry of parsed.rules) {
@@ -494,14 +514,25 @@ function isSessionEnabled(fence, sessionId, rules) {
 }
 
 /**
+ * 该会话是否整体不使用围栏规则（用户 CR-22 的「豁免名单」）。
+ * 名单只影响注入，不删除该会话已配置的规则 —— 取消豁免后原样恢复。
+ */
+function isSessionMuted(fence, sessionId) {
+  if (!Array.isArray(fence.mutedSessions)) return false;
+  return fence.mutedSessions.includes(sessionId);
+}
+
+/**
  * 实际注入的规则正文 = 通用规则（每个对话都有）+ 本会话专属规则。
  * 通用规则先编号，会话规则接在后面。总开关关掉时一律不注入。
  * 单条开关关掉的规则直接不参与渲染 —— 编号按「启用后的顺序」连续，不留空洞。
+ * 豁免名单里的会话整段不注入：通用层与专属层都不给（不只是关专属规则）。
  */
 function fenceTextFor(sessionId) {
   if (sessionId === '') return '';
   const fence = loadFence();
   if (fence.enabled !== true) return '';
+  if (isSessionMuted(fence, sessionId)) return '';
   const texts = pickEnabled(commonRules(fence), commonFlags(fence));
   const own = sessionRules(fence, sessionId);
   if (isSessionEnabled(fence, sessionId, own)) texts.push(...pickEnabled(own, sessionFlags(fence, sessionId)));
@@ -569,6 +600,8 @@ function snapshotOf(sessionId) {
     sessionId,
     enabled: isSessionEnabled(fence, sessionId, own),
     globalEnabled: fence.enabled === true,
+    // 整个会话被豁免围栏（不使用任何围栏规则）；rendered 此时必为空串。
+    muted: isSessionMuted(fence, sessionId),
     common: { rules: rulesView(commonRules(fence), commonFlags(fence)), ...fileInfo() },
     rules: rulesView(own, sessionFlags(fence, sessionId)),
     rendered,
@@ -590,6 +623,8 @@ function knownSessions(fence) {
     rows.push({
       sessionId,
       enabled: entry?.enabled !== false && active.length > 0,
+      // 豁免名单里的会话不注入任何规则，activeRuleCount 如实归零便于 UI 直接读。
+      muted: isSessionMuted(fence, sessionId),
       ruleCount: rules.length,
       activeRuleCount: active.length,
       chars: active.reduce((sum, text) => sum + text.length, 0),
@@ -618,6 +653,8 @@ function overviewOf() {
     },
     dataDir: path.dirname(fenceFile()),
     ...fileInfo(),
+    // 豁免名单原文（设置页多选控件读它）；没有豁免时是空数组。
+    mutedSessions: Array.isArray(fence.mutedSessions) ? [...fence.mutedSessions] : [],
     sessions: knownSessions(fence),
     limits: LIMITS,
   };
@@ -728,6 +765,21 @@ function applyAction(sessionId, action, payload) {
       // 上一轮 spawn 的异步失败：由这里带到前端，否则失败对用户永远不可见。
       openWarning: opened.warning ?? null,
     };
+  }
+
+  // 豁免名单与单个会话无关：一次可以提交多个会话（面板多选），所以必须在会话 id 校验之前处理。
+  if (action === 'mute') {
+    const incoming = Array.isArray(payload?.sessions) ? payload.sessions : [];
+    const targets = normalizeMutedSessions(incoming);
+    const muted = payload?.muted !== false;
+    const current = new Set(normalizeMutedSessions(fence.mutedSessions));
+    for (const id of targets) {
+      if (muted) current.add(id);
+      else current.delete(id);
+    }
+    fence.mutedSessions = [...current].sort();
+    saveFence(fence);
+    return overviewOf();
   }
 
   if (scope === 'session' && sessionId === '') return { ok: false, error: '缺少会话 id' };
@@ -842,7 +894,7 @@ async function handleApi(request) {
     return jsonResponse({ ok: false, error: '请求体必须是 JSON' }, 400);
   }
   const action = typeof body?.action === 'string' ? body.action : '';
-  if (action === 'toggleGlobal' || action === 'switch' || action === 'setFile' || action === 'openFolder') {
+  if (action === 'toggleGlobal' || action === 'switch' || action === 'setFile' || action === 'openFolder' || action === 'mute') {
     const snapshot = applyAction('', action, body ?? {});
     return snapshot.ok === false ? jsonResponse(snapshot, 400) : jsonResponse(snapshot);
   }
@@ -876,11 +928,13 @@ function statusText(sessionId) {
   const ownFlags = sessionFlags(fence, sessionId);
   const commonRuleFlags = commonFlags(fence);
   const enabled = isSessionEnabled(fence, sessionId, own);
+  const muted = isSessionMuted(fence, sessionId);
   const text = fenceTextFor(sessionId);
   const lines = [
     `/fence status — 会话 ${sessionId}`,
     `总开关: ${fence.enabled === true ? '开' : '关（所有对话都不注入）'}`,
     `通用规则: ${common.length} 条（启用 ${pickEnabled(common, commonRuleFlags).length} 条，对所有对话生效）`,
+    `本会话豁免: ${muted ? '是（本会话不使用任何围栏规则，/fence unmute 恢复）' : '否'}`,
     `本会话: ${enabled ? '已启用' : '未启用（本会话专属规则不注入）'}`,
     `本会话专属规则: ${own.length} 条（启用 ${pickEnabled(own, ownFlags).length} 条）`,
     `实际注入: ${text.length} 字符 ≈ ${tokenEstimate(text)} token`,
@@ -920,6 +974,9 @@ const HELP = [
   '/fence all clear            清空通用规则',
   '',
   '/fence switch on | off      总开关（关掉后所有对话都不注入）',
+  '/fence mute                 本会话不使用围栏规则（通用 + 专属都不注入）',
+  '/fence unmute               恢复本会话使用围栏规则',
+  '/fence muted                查看「不使用围栏」的会话名单',
   '/fence file <绝对路径>      把围栏文件换到别的位置',
   '/fence open                 打开围栏文件所在文件夹',
   '',
@@ -1042,6 +1099,27 @@ function handleFence(invocation) {
     if (opened.ok === false) return fail(opened.error);
     const note = openNotes(opened);
     return succeed(`已打开围栏文件夹:\n${opened.dir}\n\n围栏文件: ${fenceFile()}${note}`);
+  }
+
+  // 豁免名单：/fence muted 不需要会话 id；mute / unmute 默认作用于当前会话。
+  if (verb === 'muted' || verb === 'mute-list') {
+    const fence = loadFence();
+    const list = Array.isArray(fence.mutedSessions) ? fence.mutedSessions : [];
+    if (list.length === 0) return succeed('没有任何会话被豁免：所有对话都使用围栏规则。');
+    return succeed(`不使用围栏规则的会话（${list.length} 个）:\n${list.map((id, i) => `  ${i + 1}. ${id}`).join('\n')}`);
+  }
+  if (verb === 'mute' || verb === 'unmute') {
+    const target = sanitizeSessionId(argument.length === 0 ? sessionId : argument);
+    if (target === '') return fail(`/fence ${verb} 无法确定会话 id（可显式写 /fence ${verb} <会话 id>）`);
+    const fence = loadFence();
+    const current = new Set(normalizeMutedSessions(fence.mutedSessions));
+    if (verb === 'mute') current.add(target);
+    else current.delete(target);
+    fence.mutedSessions = [...current].sort();
+    saveFence(fence);
+    const note = verb === 'mute' ? '已豁免：本会话不再使用任何围栏规则' : '已恢复：本会话重新使用围栏规则';
+    if (sessionId === '') return succeed(note);
+    return succeed(`${note}\n${statusText(sessionId)}`);
   }
 
   if (sessionId === '') return fail('/fence: 无法确定当前会话 id');

@@ -97,6 +97,11 @@ async function post(payload) {
   return { status: response.status, body: await response.json() };
 }
 
+async function get(query) {
+  const response = await route.fetch(new Request(url + query, { method: 'GET' }));
+  return { status: response.status, body: await response.json() };
+}
+
 const sessionId = 'installed-smoke';
 const RULE_A = '规则甲';
 const RULE_B = '规则乙';
@@ -161,6 +166,46 @@ await post({ action: 'toggleRule', sessionId, index: 0, enabled: false });
 const allOff = await post({ action: 'toggleRule', sessionId, index: 1, enabled: false });
 check('全部停用后 rendered 为空', allOff.body.rendered === '', JSON.stringify(allOff.body.rendered));
 
+// 5.5) 0.14.0 整条对话豁免：一次提交一个（多选走同一动作，这里只验一条以免 token 失控）
+await post({ action: 'toggleRule', sessionId, index: 0, enabled: true });
+await post({ action: 'toggleRule', sessionId, index: 1, enabled: true });
+const muted = await post({ action: 'mute', sessions: [sessionId], muted: true });
+// mute 返回的是 overview（没有 rendered 字段），注入结果要再拉一次会话快照。
+const mutedSnapshot = await get('?sessionId=' + encodeURIComponent(sessionId));
+check(
+  '整条对话豁免后 rendered 为空（通用 + 专属都不注入）',
+  mutedSnapshot.status === 200 && mutedSnapshot.body.rendered === '',
+  JSON.stringify(mutedSnapshot.body.rendered),
+);
+check(
+  'overview 的 mutedSessions 带上该会话',
+  Array.isArray(muted.body.mutedSessions) && muted.body.mutedSessions.includes(sessionId),
+  JSON.stringify(muted.body.mutedSessions),
+);
+check(
+  '会话快照标记 muted',
+  mutedSnapshot.body.muted === true,
+  JSON.stringify(mutedSnapshot.body.muted),
+);
+const mutedDisk = JSON.parse(fs.readFileSync(path.join(home, 'fence.json'), 'utf8'));
+check(
+  '豁免名单已落盘、规则一条都没删',
+  Array.isArray(mutedDisk.mutedSessions)
+    && mutedDisk.mutedSessions.includes(sessionId)
+    && Array.isArray(mutedDisk.sessions[sessionId].rules)
+    && mutedDisk.sessions[sessionId].rules.length === 2,
+  JSON.stringify({ muted: mutedDisk.mutedSessions, rules: mutedDisk.sessions[sessionId].rules }),
+);
+const unmuted = await post({ action: 'mute', sessions: [sessionId], muted: false });
+const unmutedSnapshot = await get('?sessionId=' + encodeURIComponent(sessionId));
+check(
+  '取消豁免后原样恢复注入',
+  String(unmutedSnapshot.body.rendered).includes(RULE_A)
+    && String(unmutedSnapshot.body.rendered).includes(RULE_B)
+    && unmutedSnapshot.body.muted === false,
+  JSON.stringify({ rendered: unmutedSnapshot.body.rendered, muted: unmutedSnapshot.body.muted }),
+);
+
 // 6) 前端产物：安装副本的 client.js 必须带「单条开关」的样式与接线
 const clientPath = path.join(path.dirname(ENTRY), 'client.js');
 if (!fs.existsSync(clientPath)) {
@@ -172,6 +217,16 @@ if (!fs.existsSync(clientPath)) {
   const toggleCalls = (clientSource.match(/toggleRule/gu) ?? []).length;
   check('通用层与专属层都接 toggleRule（>=2 处）', toggleCalls >= 2, String(toggleCalls));
   check('开关按 role="switch" 暴露给读屏', clientSource.includes("role: 'switch'"));
+  check(
+    'client.js 带「不使用围栏的对话」多选区（0.14.0）',
+    clientSource.includes("'dialog-fence-mute-list'")
+      && clientSource.includes("'dialog-fence-mute-name'")
+      && clientSource.includes('.dialog-fence-mute-name{'),
+  );
+  check(
+    '多选区是独立行、不寄生在 picker-row 上',
+    !/className: 'dialog-fence-picker-row',[\s\S]{0,200}dialog-fence-mute-/u.test(clientSource),
+  );
 }
 
 // 7) 清理隔离目录
@@ -179,7 +234,7 @@ fs.rmSync(home, { recursive: true, force: true });
 
 console.log('');
 if (failures.length === 0) {
-  console.log('OK installed dialog-fence ' + version + ' per-rule toggle verified');
+  console.log('OK installed dialog-fence ' + version + ' per-rule toggle + session mute verified');
   process.exit(0);
 }
 console.error('FAILED ' + failures.length + ' assertion(s):');

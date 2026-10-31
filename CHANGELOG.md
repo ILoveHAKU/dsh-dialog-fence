@@ -13,6 +13,47 @@ Versions are tagged from `0.2.0` on; `0.1.0` was the first drop and was never co
 
 ---
 
+## 0.14.0 — 可以多选对话让它们整段不使用围栏（规则保留，取消即恢复）
+
+用户要求：能选择**对哪些对话不再使用围栏规则**，对话可以**多选**，
+并且特别强调「要注意 UI，不要多选了以后把别的东西挤出去」。
+
+- **新增一块「不使用围栏规则的对话（可选）」**（设置页、插件详情页、内置插件标签页、
+  浮层四个入口同一组件）：一列可滚动的复选行，每行 = 勾选框 + 对话名 + 勾选后的「不使用围栏」标记。
+  勾上的对话**通用规则和专属规则都不注入** —— 等同于这条对话没有围栏。
+- **规则一条都不删**：豁免只是「不注入」，`rules` / `sessions[id].rules` 原封不动，
+  取消勾选立刻原样恢复。这条是刻意的：用户想要的是「暂时别管我」，不是「把我配的东西删掉」。
+- **默认全都不勾**：升级后行为与 0.13.x 完全一致，老文件一个字符都不用改。
+- **UI 不会被挤变形**（用户点名的那条）：
+  - 豁免区自成一套行（`dialog-fence-mute-row`），**没有复用**选择器那两行
+    `dialog-fence-picker-row` —— 那两行被 `test/render.mjs` 按「恰好 2 个」钉住，
+    一旦复用，勾选时新增的行就会把「对话」下拉和「停用该对话」按钮挤走。
+  - 宽度约束是单向的：只有对话名 `.dialog-fence-mute-name` 允许收缩（`flex:1;min-width:0` +
+    单行 `text-overflow:ellipsis`），勾选框、标记、底部两个按钮全部 `flex:none;white-space:nowrap`。
+    所以勾再多条，变化的只有这一列的**高度**（`max-height:180px` 后自己滚动），
+    横向布局一个像素都不动。
+  - 空候选时渲染「还没有可选的对话。」，不会出现空白卡片。
+- **一次可提交多个**：HTTP 动作 `{ action: 'mute', sessions: [...], muted: true|false }`
+  接受任意长度的会话 id 数组（勾一个 / 全选 / 全取消都走同一条路径），也支持
+  `muted: false` 单独取消。落盘前统一消毒（`sanitizeSessionId`：只留字母数字与 `-_.`）、
+  去重、排序，所以同一组多选无论勾选顺序如何，`fence.json` 里的字节完全一致。
+- **命令层面也能用**：`/fence mute` 让本会话整段不使用围栏、`/fence unmute` 恢复、
+  `/fence muted` 列出当前豁免名单；`/fence mute <会话 id>` 可指定别的会话。
+  `/fence status` 多一行「本会话豁免」。
+- **快照带上状态**：`snapshotOf` 增 `muted: boolean`，`overviewOf` 增 `mutedSessions: string[]`，
+  `knownSessions` 每行增 `muted` —— 前端据此渲染勾选态，不再靠猜。
+- 新增 `test/sessionmute.mjs`（加入 `npm test` 与 `npm run test:sessionmute`）：9 段断言覆盖
+  「默认不豁免 / 单条豁免后两层都不注入 / 多选一次提交 / 取消即恢复 / 规则本身不动 /
+  脏 id 消毒与排序 / 快照字段 / 命令层 / 老文件兼容」。先红后绿：改 `index.js` 之前
+  `node test/sessionmute.mjs` 报 `FAIL: 22 处不满足`（`{"ok":false,"error":"缺少或非法的 sessionId"}`、
+  豁免后仍注入 `1. 通用规则甲`、清单行没有 `muted`）；改完输出
+  `OK all dialog-fence session-mute assertions passed`。
+- `test/client.mjs` 新增 5.45 段、`test/render.mjs` 新增 3.8 段，把上面那条 UI 约束钉成回归：
+  只要有人把豁免行塞回 `picker-row`，或者让对话名以外的东西变成可收缩，
+  这两段立刻红。
+
+---
+
 ## 0.13.0 — 每条规则一个启停滑块（单条规则可临时停用，默认启用）
 
 用户要求：围栏的每一条配置都要能单独控制启用 / 不启用，随时把某一条暂时关掉，

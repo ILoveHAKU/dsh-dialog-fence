@@ -227,6 +227,28 @@ assert.match(
   'the select grows to fill its row instead of keeping a fixed max-width',
 );
 
+// ---- 3.8) 「不使用围栏的对话」多选区（0.14.0，用户 CR-22）--------------------
+// 需求：可以勾多个对话让它们整段跳过围栏；硬要求是**多选之后不许把别的东西挤出去**。
+// 这里用真实渲染钉住三件事：
+//  1) 卡片存在，且首帧（概览还没回来）不会因为名单缺失而崩；
+//  2) 多选区自成一套行，**没有**借用 picker 的两行布局 —— 上面的「恰好 2 个
+//     picker-row」断言在这种情况下仍然成立，就是最直接的证据；
+//  3) 候选行数量与下拉候选一致，说明勾选名单没有把选择器挤走。
+assert.match(withSessionsMarkup, /不使用围栏规则的对话（可选）/, 'the page offers a conversation-exclusion card');
+assert.match(withSessionsMarkup, /class="dialog-fence-mute-list"/, 'the exclusion card renders its own list container');
+assert.equal(
+  (withSessionsMarkup.match(/class="dialog-fence-picker-row"/g) ?? []).length,
+  2,
+  'adding the exclusion list must not disturb the picker rows',
+);
+const muteRows = withSessionsMarkup.match(/class="dialog-fence-mute-row"/g) ?? [];
+assert.ok(muteRows.length > 0, 'the exclusion list lists the conversations');
+assert.match(withSessionsMarkup, /class="dialog-fence-mute-name"/, 'each exclusion entry carries the conversation name');
+assert.match(withSessionsMarkup, /全部不使用围栏/, 'there is a one-click "all skip the fence" action');
+assert.match(withSessionsMarkup, /恢复全部使用围栏/, 'there is a one-click "everyone uses the fence again" action');
+assert.doesNotMatch(withSessionsMarkup, /session-zzzzzzzz-yyyy-/, 'the exclusion list never shows a session id');
+assert.match(overlayCardsMarkup, /不使用围栏规则的对话（可选）/, 'the overlay carries the exclusion card too');
+
 // ---- 3.8) 空对话不得进入下拉（用户 CR-20）------------------------------------
 // 事故样子：下拉里冒出大量 `harness` / `workspace` 选项。
 // 根因不是「工作区被当成了对话」，而是那些「建了但一句话没说过」的空对话

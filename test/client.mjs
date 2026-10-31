@@ -346,8 +346,49 @@ assert.doesNotMatch(
   'the switch is no longer wedged between the index and the text',
 );
 
-// ---- 5.5) 设置页补上「专属规则」编辑区 + 会话下拉（显示名称，不显示 id）------
-// 缺陷（用户 CR-17 第 1 条）：设置页第三张卡过去只有两句说明文字，
+// ---- 5.45) 「不使用围栏的对话」多选区（0.14.0，用户 CR-22）-----------------
+// 需求：可以勾选若干对话让它们整段跳过围栏，且**多选之后不许把别的东西挤出去**。
+// 布局纪律用三条静态断言钉住：
+//  1) 多选行自己一套类名（dialog-fence-mute-*），不混进 picker-row
+//     （render 测试钉死 picker-row 恰好 2 个，混进去就立刻红）；
+//  2) 名字是唯一 flex:1 + min-width:0 + 省略号的元素 —— 勾多少条只会让名单纵向
+//     变长，绝不会横向挤压同行的按钮/标记；
+//  3) 列表有独立的 max-height + overflow:auto，条目再多也不撑破卡片。
+assert.match(source, /className: 'dialog-fence-mute-list'/, 'the exclusion list has its own container class');
+assert.match(source, /className: 'dialog-fence-mute-row'/, 'each exclusion entry is its own row');
+assert.match(source, /className: 'dialog-fence-mute-name'/, 'the conversation name has a dedicated class');
+assert.match(
+  source,
+  /\.dialog-fence-mute-name\{[^}]*flex:1[^}]*min-width:0[^}]*text-overflow:ellipsis/,
+  'the name is the only shrinkable cell: flex:1 + min-width:0 + ellipsis, so it never pushes neighbours out',
+);
+assert.match(
+  source,
+  /\.dialog-fence-mute-list\{[^}]*max-height[^}]*overflow:auto/,
+  'the list scrolls inside a capped height instead of growing the card',
+);
+assert.match(
+  source,
+  /\.dialog-fence-mute-tag\{[^}]*flex:none[^}]*white-space:nowrap/,
+  'the state tag never shrinks or wraps',
+);
+// 多选区绝不能混进 picker-row：那两个行被 render 测试按「恰好 2 个」计数钉住，
+// 一旦复用，用户勾了一个对话就会把选择器那两行挤变形（正是 CR-19 的原病）。
+assert.doesNotMatch(
+  source,
+  /className: 'dialog-fence-picker-row',[\s\S]{0,200}dialog-fence-mute-/,
+  'the exclusion rows do not reuse the picker row layout',
+);
+assert.match(source, /act\(undefined, 'mute', \{ sessions: \[id\], muted: nextMuted \}\)/, 'toggling one conversation sends a mute action');
+assert.match(source, /'全部不使用围栏'/, 'there is a one-click "all conversations skip the fence" action');
+assert.match(source, /'恢复全部使用围栏'/, 'there is a one-click "everyone uses the fence again" action');
+assert.match(
+  source,
+  /Array\.isArray\(overview\?\.mutedSessions\)/,
+  'the page reads the exclusion list from the overview snapshot (missing field = nobody excluded)',
+);
+
+// ---- 5.5) 设置页补上「专属规则」编辑区 + 会话下拉（显示名称，不显示 id）------// 缺陷（用户 CR-17 第 1 条）：设置页第三张卡过去只有两句说明文字，
 // 让用户「去右上角浮层里改」，两处界面不同步。现在两边共用同一份数据与同一套动作。
 assert.match(
   source,
