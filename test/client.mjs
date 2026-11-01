@@ -100,6 +100,21 @@ globalThis.fetch = async (url, init) => {
   };
 };
 
+// localStorage：折叠/展开的记忆就存在这里（浏览器里由页面提供，Node 里没有）。
+// 用一个内存实现替身，既能验证「写进去」，也能验证「下次挂载时读回来」。
+const storage = new Map();
+globalThis.localStorage = {
+  getItem(key) {
+    return storage.has(String(key)) ? storage.get(String(key)) : null;
+  },
+  setItem(key, value) {
+    storage.set(String(key), String(value));
+  },
+  removeItem(key) {
+    storage.delete(String(key));
+  },
+};
+
 // ---- 执行 bundle -----------------------------------------------------------
 const source = readFileSync(CLIENT_FILE, 'utf8');
 const module = { exports: {} };
@@ -387,6 +402,93 @@ assert.match(
   /Array\.isArray\(overview\?\.mutedSessions\)/,
   'the page reads the exclusion list from the overview snapshot (missing field = nobody excluded)',
 );
+
+// ---- 5.47) 每个大模块各有自己的折叠/展开按钮（0.15.0，用户 CR-23）-------------
+// 用户原话：「围栏的每个大模块增加一个折叠和展开的按钮，要不然太长了，越来越长」。
+// 五张卡片各配一个按钮，标题行永远留着，正文按需收起。
+// 折叠状态只活在这一份界面里：不写进围栏文件、不跨面板记住，默认全部展开 ——
+// 所以上面那些「首帧必须出现某某文案」的断言仍然成立（内容没被藏起来）。
+assert.match(source, /className: 'dialog-fence-fold'/, 'each card head gets its own fold button');
+for (const key of ['global', 'rules', 'session', 'mute', 'path']) {
+  assert.match(source, new RegExp(`foldCard\\(\\s*'${key}'`), `the ${key} card is foldable`);
+}
+assert.match(
+  source,
+  /const isFolded = \(key\) => folded\[key\] === true;/,
+  'only an explicit true counts as folded, so every card starts expanded',
+);
+assert.match(
+  source,
+  /'aria-expanded': isFolded\(key\) \? 'false' : 'true'/,
+  'the fold button reports its state to assistive tech',
+);
+assert.match(
+  source,
+  /\.dialog-fence-fold\{[^}]*flex:none[^}]*white-space:nowrap/,
+  'the fold button never shrinks or wraps, so it cannot squeeze the card title',
+);
+// 收起必须是可逆的：再点一次就把这个 key 删掉，回到「默认展开」，
+// 而不是记成 false 之外的第二状态。
+assert.match(source, /delete next\[key\]/, 'folding is a toggle, not a one-way trip');
+
+// ---- 5.48) 折叠状态要记住（0.15.1，用户 CR-24）--------------------------------
+// 用户原话：「收起以后，再打开又变成展开的状态了，增加一个状态记忆」。
+// 记在浏览器 localStorage 里（第三方客户端插件的通行做法），不写进围栏文件 ——
+// 折叠纯属界面偏好，不该污染规则数据，也不该让宿主多存一份状态。
+const FOLD_KEY = 'dsh-dialog-fence:folded';
+assert.match(source, /const FOLD_STORAGE_KEY = /, 'the storage key lives in one named constant');
+
+function findNodes(node, predicate, out = []) {
+  if (node === null || node === undefined || node === false) return out;
+  if (Array.isArray(node)) {
+    for (const child of node) findNodes(child, predicate, out);
+    return out;
+  }
+  if (typeof node !== 'object') return out;
+  if (predicate(node)) out.push(node);
+  findNodes(node.children, predicate, out);
+  return out;
+}
+const foldButtonsOf = (tree) => findNodes(tree, (node) => node.props?.className === 'dialog-fence-fold');
+const cardBodyCount = (tree) =>
+  findNodes(tree, (node) => node.props?.className === 'dialog-fence-card-body').length;
+
+// 收起 -> 必须落进 localStorage，不然「再打开」就无从恢复。
+storage.clear();
+const freshTree = FencePage();
+assert.equal(cardBodyCount(freshTree), 5, 'nothing is folded before the user clicks');
+const freshFoldButtons = foldButtonsOf(freshTree);
+assert.equal(freshFoldButtons.length, 5, 'every card exposes a fold button');
+// 五张卡按 global / rules / session / mute / path 的顺序渲染，取第一张（总开关卡）。
+const globalFoldButton = freshFoldButtons[0];
+assert.equal(globalFoldButton.children[0] ?? globalFoldButton.children, '收起', 'expanded cards offer to fold');
+globalFoldButton.props.onClick();
+const savedAfterClick = storage.get(FOLD_KEY);
+assert.ok(savedAfterClick !== null && savedAfterClick !== undefined, 'folding one card persists the state');
+assert.match(savedAfterClick, /"global":\s*true/, 'the persisted state names the folded card');
+
+// 下次挂载 -> 直接按记忆还原（而不是回到全展开）。
+const restoredTree = FencePage();
+assert.equal(cardBodyCount(restoredTree), 4, 'one card comes back folded from the remembered state');
+const restoredGlobalButton = foldButtonsOf(restoredTree)[0];
+assert.equal(restoredGlobalButton.props['data-folded'], 'true', 'the remembered card reports itself as folded');
+assert.equal(restoredGlobalButton.props['aria-expanded'], 'false', 'the remembered card is announced as collapsed');
+assert.equal(restoredGlobalButton.children[0] ?? restoredGlobalButton.children, '展开', 'the button now offers to unfold');
+
+// 展开回去 -> 记忆里那一项要消失，不能留成一直折叠的钉子。
+restoredGlobalButton.props.onClick();
+const savedAfterUnfold = storage.get(FOLD_KEY);
+assert.doesNotMatch(String(savedAfterUnfold), /"global":\s*true/, 'unfolding forgets the card');
+assert.equal(cardBodyCount(FencePage()), 5, 'unfolding brings the card body back');
+
+// 存储坏掉/被清空不该让整个面板崩掉：读不出来就当全展开。
+storage.set(FOLD_KEY, 'not json');
+assert.equal(cardBodyCount(FencePage()), 5, 'a corrupt stored value falls back to all-expanded');
+storage.delete(FOLD_KEY);
+assert.equal(cardBodyCount(FencePage()), 5, 'no stored value means all-expanded');
+
+// 折叠只是界面偏好：绝不能混进围栏文件或 API 负载。
+assert.doesNotMatch(source, /act\([^)]*folded/, 'folding never becomes a fence field');
 
 // ---- 5.5) 设置页补上「专属规则」编辑区 + 会话下拉（显示名称，不显示 id）------// 缺陷（用户 CR-17 第 1 条）：设置页第三张卡过去只有两句说明文字，
 // 让用户「去右上角浮层里改」，两处界面不同步。现在两边共用同一份数据与同一套动作。

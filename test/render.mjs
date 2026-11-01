@@ -249,7 +249,30 @@ assert.match(withSessionsMarkup, /恢复全部使用围栏/, 'there is a one-cli
 assert.doesNotMatch(withSessionsMarkup, /session-zzzzzzzz-yyyy-/, 'the exclusion list never shows a session id');
 assert.match(overlayCardsMarkup, /不使用围栏规则的对话（可选）/, 'the overlay carries the exclusion card too');
 
-// ---- 3.8) 空对话不得进入下拉（用户 CR-20）------------------------------------
+// ---- 3.85) 每个大模块各有自己的折叠/展开按钮（0.15.0，用户 CR-23）------------
+// 用户原话：「围栏的每个大模块增加一个折叠和展开的按钮，要不然太长了，越来越长」。
+// 用真实渲染钉住三条：
+//  1) 五张卡片各有一个折叠按钮，一个不多一个不少；
+//  2) **默认全部展开**（aria-expanded="true"、正文都在），所以上面那些
+//     「首帧必须出现某某文案」的断言仍然成立 —— 收起只是用户主动的动作；
+//  3) 按钮在卡片标题行里，标题行永远留着，收起时才不留正文。
+const foldButtons = pageMarkup.match(/class="dialog-fence-fold"/g) ?? [];
+assert.equal(foldButtons.length, 5, 'each of the five cards carries exactly one fold button');
+assert.equal(
+  (pageMarkup.match(/aria-expanded="true"/g) ?? []).length,
+  5,
+  'every card starts expanded, so nothing is hidden from a first-time visitor',
+);
+assert.doesNotMatch(pageMarkup, /aria-expanded="false"/, 'nothing is folded before the user asks for it');
+assert.equal(
+  (pageMarkup.match(/class="dialog-fence-card-body"/g) ?? []).length,
+  5,
+  'every expanded card keeps a body wrapper',
+);
+assert.match(pageMarkup, /接入真实请求的唯一一段文本/, 'the explanation card keeps its text while expanded');
+assert.match(pageMarkup, /收起/, 'the button says what it will do');
+
+
 // 事故样子：下拉里冒出大量 `harness` / `workspace` 选项。
 // 根因不是「工作区被当成了对话」，而是那些「建了但一句话没说过」的空对话
 // （宿主 sessions store 里 blank === true）没有 title，displayTitleOf() 于是

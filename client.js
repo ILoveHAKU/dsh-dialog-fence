@@ -37,6 +37,52 @@ window.__ModuleLoader__.load({
     const SLOT_BUNDLE_CONFIG = 'plugins.bundle.config';
     const BUNDLE_NAME = 'dsh-dialog-fence';
 
+    /**
+     * 折叠状态记在浏览器的 localStorage 里（与其它第三方客户端插件同一套做法）。
+     * 折叠纯属界面偏好：写进围栏文件会污染规则数据，也不该让宿主替它存一份状态。
+     * 键名带插件前缀，避免和别的插件抢同一个槽位。
+     */
+    const FOLD_STORAGE_KEY = 'dsh-dialog-fence:folded';
+    /** 五张卡片各有一个键；只认这五个，存储里多出来的东西一律忽略。 */
+    const FOLD_KEYS = ['global', 'rules', 'session', 'mute', 'path'];
+
+    function foldStorage() {
+      try {
+        // 浏览器里 localStorage 是全局的；被策略禁用时访问会抛，所以整体兜住。
+        return typeof localStorage === 'undefined' ? null : localStorage;
+      } catch {
+        return null;
+      }
+    }
+
+    /** 读出记住的折叠状态。读不到 / 内容坏掉 / 存储不可用，一律当作全部展开。 */
+    function readFolded() {
+      const store = foldStorage();
+      if (store === null) return {};
+      try {
+        const parsed = JSON.parse(store.getItem(FOLD_STORAGE_KEY) ?? '{}');
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+        const kept = {};
+        for (const key of FOLD_KEYS) {
+          if (parsed[key] === true) kept[key] = true;
+        }
+        return kept;
+      } catch {
+        return {};
+      }
+    }
+
+    /** 记住折叠状态。写失败（配额满 / 被禁用）只是「下次不记得」，不该影响交互。 */
+    function writeFolded(folded) {
+      const store = foldStorage();
+      if (store === null) return;
+      try {
+        store.setItem(FOLD_STORAGE_KEY, JSON.stringify(folded));
+      } catch {
+        // 静默：折叠记忆只是锦上添花。
+      }
+    }
+
     // ---------------------------------------------------------------------
     // 极小的外部 store：面板开合 + 各会话快照 + 全局概览
     // ---------------------------------------------------------------------
@@ -309,6 +355,15 @@ window.__ModuleLoader__.load({
       'display:flex;flex-direction:column;gap:8px;background:var(--dsw-alias-bg-layer-1)}',
       '.dialog-fence-card-head{display:flex;align-items:center;gap:10px}',
       '.dialog-fence-card-title{font-weight:600;flex:1}',
+      // 每张卡片标题行右端一个折叠/展开按钮：卡片越加越多，正文可以按需收起。
+      // 按钮 flex:none + nowrap，永远不会去挤标题；标题用 flex:1 吃掉剩余宽度。
+      '.dialog-fence-fold{flex:none;white-space:nowrap;height:22px;padding:0 8px;border-radius:6px;font:inherit;',
+      'font-size:11px;cursor:pointer;border:1px solid var(--dsw-alias-border-l2);background:transparent;',
+      'color:var(--dsw-alias-label-secondary)}',
+      '.dialog-fence-fold:hover{background:var(--dsw-alias-bg-layer-2)}',
+      '.dialog-fence-card-head > .dialog-fence-h{flex:1;min-width:0}',
+      // 收起时整块正文不渲染（不是 display:none），展开时仍然是卡片原来的纵向布局。
+      '.dialog-fence-card-body{display:flex;flex-direction:column;gap:8px;min-width:0}',
       '.dialog-fence-h{font-weight:600;font-size:14px}',
       '.dialog-fence-table{display:flex;flex-direction:column;gap:4px}',
       '.dialog-fence-tr{display:flex;gap:10px;align-items:center;padding:6px 8px;border-radius:7px;',
@@ -605,6 +660,12 @@ window.__ModuleLoader__.load({
       const [draftSession, setDraftSession] = react.useState('');
       /** 用户在下拉里挑的对话；空字符串表示「跟着默认走」。 */
       const [picked, setPicked] = react.useState('');
+      /**
+       * 每个大模块是否收起。卡片越加越多，正文可以按需折起来。
+       * 缺省全部展开；折叠与否记在 localStorage 里，所以关掉面板再打开还是原样，
+       * 刷新页面也还在（见 readFolded / writeFolded）。不写进围栏文件。
+       */
+      const [folded, setFolded] = react.useState(readFolded);
       const common = snapshot.common;
       const overview = snapshot.overview;
       const busy = snapshot.busy === true;
@@ -735,13 +796,45 @@ window.__ModuleLoader__.load({
         });
       };
 
+      // 卡片越加越多，正文太长。每个大模块各配一个折叠/展开按钮：
+      // 标题行永远留着，正文按需收起。状态记在 localStorage（见 readFolded），
+      // 所以关掉面板再打开、刷新页面之后还是原样；不写进围栏文件。
+      const isFolded = (key) => folded[key] === true;
+      const toggleFold = (key) => {
+        const next = { ...folded };
+        if (next[key] === true) delete next[key];
+        else next[key] = true;
+        setFolded(next);
+        writeFolded(next);
+      };
+      const foldButton = (key) =>
+        react.createElement(
+          'button',
+          {
+            type: 'button',
+            className: 'dialog-fence-fold',
+            'data-folded': isFolded(key) ? 'true' : 'false',
+            'aria-expanded': isFolded(key) ? 'false' : 'true',
+            title: isFolded(key) ? '展开这一块' : '收起这一块，留出空间给下面',
+            onClick: () => toggleFold(key),
+          },
+          isFolded(key) ? '展开' : '收起',
+        );
+      const foldCard = (key, head, body) =>
+        react.createElement(
+          'div',
+          { className: 'dialog-fence-card' },
+          head,
+          // body 用展开传参（不是数组），否则 React 会把它当列表要求每个子节点带 key。
+          isFolded(key) ? null : react.createElement('div', { className: 'dialog-fence-card-body' }, ...body),
+        );
+
       return react.createElement(
         'div',
         { className: flat ? 'dialog-fence-flat' : 'dialog-fence-page' },
         // ---- 卡片 1：总开关 ----
-        react.createElement(
-          'div',
-          { className: 'dialog-fence-card' },
+        foldCard(
+          'global',
           react.createElement(
             'div',
             { className: 'dialog-fence-card-head' },
@@ -757,256 +850,271 @@ window.__ModuleLoader__.load({
               },
               globalOn ? '关闭围栏' : '开启围栏',
             ),
+            foldButton('global'),
           ),
-          react.createElement(
-            'div',
-            { className: 'dialog-fence-meta' },
-            '下面这些规则对每一个对话都生效（包括新开的对话）；改完下一轮即生效。总开关关掉后，所有对话立即零注入。',
-          ),
-          react.createElement(
-            'div',
-            { className: 'dialog-fence-card-head' },
-            react.createElement('span', { className: 'dialog-fence-dir', style: { flex: 1 } }, fenceFile === '' ? '' : `围栏文件：${fenceFile}`),
-            react.createElement('button', { type: 'button', className: 'dialog-fence-btn', disabled: busy, onClick: () => act(undefined, 'openFolder') }, '打开文件夹'),
-            react.createElement('button', { type: 'button', className: 'dialog-fence-btn', disabled: busy, onClick: () => setMoving(!moving) }, moving ? '取消' : '更改位置'),
-          ),
-          moving
-            ? react.createElement(
-                'div',
-                { className: 'dialog-fence-card-head' },
-                react.createElement('input', {
-                  className: 'dialog-fence-input',
-                  placeholder: '新的围栏文件绝对路径，例如 D:\\我的围栏\\fence.json（填目录会自动补 fence.json）',
-                  value: draftFile,
-                  onChange: (event) => setDraftFile(event.target.value),
-                  onKeyDown: (event) => {
-                    if (event.key === 'Enter') moveTo();
-                  },
-                }),
-                react.createElement(
-                  'button',
-                  { type: 'button', className: 'dialog-fence-btn', 'data-primary': 'true', disabled: busy || draftFile.trim().length === 0, onClick: moveTo },
-                  '迁移',
-                ),
-              )
-            : null,
-          moving
-            ? react.createElement('div', { className: 'dialog-fence-meta' }, '迁移会把现有规则一起写到新文件，并在原目录留一个 location.json 指针。之后删掉指针就回到默认位置。')
-            : null,
-          // 「打开文件夹」没有可观察的副作用，必须自己把结果说出来，否则成功与失败长得一样。
-          typeof notice === 'string' && notice.length > 0
-            ? react.createElement('div', { className: 'dialog-fence-meta', 'data-notice': 'open-folder' }, notice)
-            : null,
+          [
+            react.createElement(
+              'div',
+              { className: 'dialog-fence-meta' },
+              '下面这些规则对每一个对话都生效（包括新开的对话）；改完下一轮即生效。总开关关掉后，所有对话立即零注入。',
+            ),
+            react.createElement(
+              'div',
+              { className: 'dialog-fence-card-head' },
+              react.createElement('span', { className: 'dialog-fence-dir', style: { flex: 1 } }, fenceFile === '' ? '' : `围栏文件：${fenceFile}`),
+              react.createElement('button', { type: 'button', className: 'dialog-fence-btn', disabled: busy, onClick: () => act(undefined, 'openFolder') }, '打开文件夹'),
+              react.createElement('button', { type: 'button', className: 'dialog-fence-btn', disabled: busy, onClick: () => setMoving(!moving) }, moving ? '取消' : '更改位置'),
+            ),
+            moving
+              ? react.createElement(
+                  'div',
+                  { className: 'dialog-fence-card-head' },
+                  react.createElement('input', {
+                    className: 'dialog-fence-input',
+                    placeholder: '新的围栏文件绝对路径，例如 D:\\我的围栏\\fence.json（填目录会自动补 fence.json）',
+                    value: draftFile,
+                    onChange: (event) => setDraftFile(event.target.value),
+                    onKeyDown: (event) => {
+                      if (event.key === 'Enter') moveTo();
+                    },
+                  }),
+                  react.createElement(
+                    'button',
+                    { type: 'button', className: 'dialog-fence-btn', 'data-primary': 'true', disabled: busy || draftFile.trim().length === 0, onClick: moveTo },
+                    '迁移',
+                  ),
+                )
+              : null,
+            moving
+              ? react.createElement('div', { className: 'dialog-fence-meta' }, '迁移会把现有规则一起写到新文件，并在原目录留一个 location.json 指针。之后删掉指针就回到默认位置。')
+              : null,
+            // 「打开文件夹」没有可观察的副作用，必须自己把结果说出来，否则成功与失败长得一样。
+            typeof notice === 'string' && notice.length > 0
+              ? react.createElement('div', { className: 'dialog-fence-meta', 'data-notice': 'open-folder' }, notice)
+              : null,
+          ],
         ),
 
         // ---- 卡片 2：通用规则（主视图，可直接编辑正文） ----
-        react.createElement(
-          'div',
-          { className: 'dialog-fence-card' },
-          react.createElement('div', { className: 'dialog-fence-h' }, '围栏规则（对每个对话生效）'),
-          common === null
-            ? react.createElement('div', { className: 'dialog-fence-empty' }, '读取中…')
-            : rules.length === 0
-              ? react.createElement('div', { className: 'dialog-fence-empty' }, '还没有规则。在下面输入一条并回车。')
-              : rules.map((rule, index) =>
-                  react.createElement(RuleRow, {
-                    key: `common-${index}`,
-                    rule,
-                    index,
-                    busy,
-                    onSave: (target, text) => act(COMMON_SCOPE, 'update', { index: target, text }),
-                    onRemove: (target) => act(COMMON_SCOPE, 'remove', { index: target }),
-                    onToggle: (target, enabled) => act(COMMON_SCOPE, 'toggleRule', { index: target, enabled }),
-                  }),
-                ),
-          react.createElement('textarea', {
-            className: 'dialog-fence-textarea',
-            rows: 3,
-            spellCheck: false,
-            placeholder: '新建一条规则（所有规则存在同一个围栏文件里）。Ctrl+Enter 添加，可换行。',
-            value: draft,
-            onChange: (event) => setDraft(event.target.value),
-            onKeyDown: (event) => {
-              if (event.key === 'Enter' && (event.ctrlKey === true || event.metaKey === true)) {
-                event.preventDefault();
-                add();
-              }
-            },
-          }),
-          snapshot.error !== null ? react.createElement('div', { className: 'dialog-fence-error' }, snapshot.error) : null,
+        foldCard(
+          'rules',
           react.createElement(
             'div',
             { className: 'dialog-fence-card-head' },
-            react.createElement(
-              'button',
-              { type: 'button', className: 'dialog-fence-btn', 'data-primary': 'true', disabled: busy || draft.trim().length === 0, onClick: add },
-              '添加',
-            ),
-            react.createElement(
-              'button',
-              {
-                type: 'button',
-                className: 'dialog-fence-btn',
-                disabled: busy || rules.length === 0,
-                onClick: () => act(COMMON_SCOPE, 'clear'),
-              },
-              '清空全部',
-            ),
-            react.createElement(
-              'span',
-              { className: 'dialog-fence-meta', style: { flex: 1 } },
-              common === null
-                ? ''
-                : `注入 ${common.chars ?? 0} 字符 ≈ ${common.tokens ?? 0} token · ${rules.length}/${common.limits?.maxRules ?? 40} 条 · 单条上限 ${common.limits?.maxRuleChars ?? 2000} 字符`,
-            ),
+            react.createElement('div', { className: 'dialog-fence-h' }, '围栏规则（对每个对话生效）'),
+            foldButton('rules'),
           ),
-        ),
-
-        // ---- 卡片 3：单个对话的专属规则（与右上角浮层同一份数据、同一套操作） ----
-        react.createElement(
-          'div',
-          { className: 'dialog-fence-card' },
-          react.createElement('div', { className: 'dialog-fence-h' }, '某个对话的额外规则（可选）'),
-          react.createElement(
-            'div',
-            { className: 'dialog-fence-meta' },
-            '上面是通用规则，对每个对话都生效。下面这一层只叠加到所选对话，不影响其它对话；右上角「围栏」浮层改的是同一份数据。',
-          ),
-          // 对话选择器：只显示名称，绝不显示 sessionId。
-          // 名字来自槽位的 useSessions（客户端 sessions store），没有名字时用「未命名对话 N」。
-          choices.length === 0
-            ? react.createElement(
-                'div',
-                { className: 'dialog-fence-empty' },
-                overview === null && sessionById === undefined ? '读取中…' : '还没有可选的对话。',
-              )
-            : react.createElement(
-                'div',
-                { className: 'dialog-fence-picker' },
-                // 第一行：标签 + 下拉。下拉 flex:1，宽度跟着卡片走，不再固定 320px。
-                react.createElement(
-                  'div',
-                  { className: 'dialog-fence-picker-row' },
-                  react.createElement('span', { className: 'dialog-fence-label' }, '对话'),
-                  react.createElement(
-                    'select',
-                    {
-                      className: 'dialog-fence-select',
-                      value: String(targetIndex < 0 ? '' : targetIndex),
-                      disabled: busy,
-                      onChange: (event) => {
-                        const next = choices[Number(event.target.value)];
-                        setPicked(next === undefined ? '' : next.id);
-                      },
-                    },
-                    choices.map((choice, choiceIndex) =>
-                      react.createElement(
-                        'option',
-                        { key: choice.id, value: String(choiceIndex) },
-                        choice.id === currentId ? `${choice.label}（当前）` : choice.label,
-                      ),
-                    ),
-                  ),
-                ),
-                // 第二行：只对这一个对话开关围栏（不影响别的对话）——浮层过去叫
-                // 「停用本对话」，设置页也必须有同一个动作，否则两边行为不一致。
-                // 计数放在这一行，且 nowrap —— 两者都不会再被下拉挤到换行。
-                react.createElement(
-                  'div',
-                  { className: 'dialog-fence-picker-row' },
-                  targetSession === ''
-                    ? null
-                    : react.createElement(
-                        'button',
-                        {
-                          type: 'button',
-                          className: 'dialog-fence-btn',
-                          disabled: busy,
-                          onClick: () => act(targetSession, 'toggle', { enabled: !(targetEntry?.enabled === true) }),
-                        },
-                        targetEntry?.enabled === true ? '停用该对话' : '启用该对话',
-                      ),
-                  react.createElement(
-                    'span',
-                    { className: 'dialog-fence-count' },
-                    targetSession === '' ? '' : `${targetRules.length}/${targetEntry?.limits?.maxRules ?? 40} 条专属规则`,
-                  ),
-                ),
-              ),
-          targetSession === ''
-            ? null
-            : targetEntry === undefined || targetEntry.limits === undefined
+          [
+            common === null
               ? react.createElement('div', { className: 'dialog-fence-empty' }, '读取中…')
-              : targetRules.length === 0
-                ? react.createElement('div', { className: 'dialog-fence-empty' }, '这个对话没有专属规则（只用上面的通用规则）。')
-                : targetRules.map((rule, index) =>
+              : rules.length === 0
+                ? react.createElement('div', { className: 'dialog-fence-empty' }, '还没有规则。在下面输入一条并回车。')
+                : rules.map((rule, index) =>
                     react.createElement(RuleRow, {
-                      key: `page-session-${index}`,
+                      key: `common-${index}`,
                       rule,
                       index,
                       busy,
-                      onSave: (target, text) => act(targetSession, 'update', { index: target, text }),
-                      onRemove: (target) => act(targetSession, 'remove', { index: target }),
-                      onToggle: (target, enabled) => act(targetSession, 'toggleRule', { index: target, enabled }),
+                      onSave: (target, text) => act(COMMON_SCOPE, 'update', { index: target, text }),
+                      onRemove: (target) => act(COMMON_SCOPE, 'remove', { index: target }),
+                      onToggle: (target, enabled) => act(COMMON_SCOPE, 'toggleRule', { index: target, enabled }),
                     }),
                   ),
-          targetSession === ''
-            ? null
-            : react.createElement('textarea', {
-                className: 'dialog-fence-textarea',
-                rows: 2,
-                spellCheck: false,
-                placeholder: '新增一条只作用于所选对话的规则。Ctrl+Enter 添加，可换行。',
-                value: draftSession,
-                onChange: (event) => setDraftSession(event.target.value),
-                onKeyDown: (event) => {
-                  if (event.key === 'Enter' && (event.ctrlKey === true || event.metaKey === true)) {
-                    event.preventDefault();
-                    addSession();
-                  }
+            react.createElement('textarea', {
+              className: 'dialog-fence-textarea',
+              rows: 3,
+              spellCheck: false,
+              placeholder: '新建一条规则（所有规则存在同一个围栏文件里）。Ctrl+Enter 添加，可换行。',
+              value: draft,
+              onChange: (event) => setDraft(event.target.value),
+              onKeyDown: (event) => {
+                if (event.key === 'Enter' && (event.ctrlKey === true || event.metaKey === true)) {
+                  event.preventDefault();
+                  add();
+                }
+              },
+            }),
+            snapshot.error !== null ? react.createElement('div', { className: 'dialog-fence-error' }, snapshot.error) : null,
+            react.createElement(
+              'div',
+              { className: 'dialog-fence-card-head' },
+              react.createElement(
+                'button',
+                { type: 'button', className: 'dialog-fence-btn', 'data-primary': 'true', disabled: busy || draft.trim().length === 0, onClick: add },
+                '添加',
+              ),
+              react.createElement(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dialog-fence-btn',
+                  disabled: busy || rules.length === 0,
+                  onClick: () => act(COMMON_SCOPE, 'clear'),
                 },
-              }),
-          targetSession === ''
-            ? null
-            : react.createElement(
-                'div',
-                { className: 'dialog-fence-card-head' },
-                react.createElement(
-                  'button',
-                  { type: 'button', className: 'dialog-fence-btn', 'data-primary': 'true', disabled: busy || draftSession.trim().length === 0, onClick: addSession },
-                  '添加专属规则',
+                '清空全部',
+              ),
+              react.createElement(
+                'span',
+                { className: 'dialog-fence-meta', style: { flex: 1 } },
+                common === null
+                  ? ''
+                  : `注入 ${common.chars ?? 0} 字符 ≈ ${common.tokens ?? 0} token · ${rules.length}/${common.limits?.maxRules ?? 40} 条 · 单条上限 ${common.limits?.maxRuleChars ?? 2000} 字符`,
+              ),
+            ),
+          ],
+        ),
+
+        // ---- 卡片 3：单个对话的专属规则（与右上角浮层同一份数据、同一套操作） ----
+        // ---- 卡片 3：单个对话的专属规则（与右上角浮层同一份数据、同一套操作） ----
+        foldCard(
+          'session',
+          react.createElement(
+            'div',
+            { className: 'dialog-fence-card-head' },
+            react.createElement('div', { className: 'dialog-fence-h' }, '某个对话的额外规则（可选）'),
+            foldButton('session'),
+          ),
+          [
+            react.createElement(
+              'div',
+              { className: 'dialog-fence-meta' },
+              '上面是通用规则，对每个对话都生效。下面这一层只叠加到所选对话，不影响其它对话；右上角「围栏」浮层改的是同一份数据。',
+            ),
+            // 对话选择器：只显示名称，绝不显示 sessionId。
+            // 名字来自槽位的 useSessions（客户端 sessions store），没有名字时用「未命名对话 N」。
+            choices.length === 0
+              ? react.createElement(
+                  'div',
+                  { className: 'dialog-fence-empty' },
+                  overview === null && sessionById === undefined ? '读取中…' : '还没有可选的对话。',
+                )
+              : react.createElement(
+                  'div',
+                  { className: 'dialog-fence-picker' },
+                  // 第一行：标签 + 下拉。下拉 flex:1，宽度跟着卡片走，不再固定 320px。
+                  react.createElement(
+                    'div',
+                    { className: 'dialog-fence-picker-row' },
+                    react.createElement('span', { className: 'dialog-fence-label' }, '对话'),
+                    react.createElement(
+                      'select',
+                      {
+                        className: 'dialog-fence-select',
+                        value: String(targetIndex < 0 ? '' : targetIndex),
+                        disabled: busy,
+                        onChange: (event) => {
+                          const next = choices[Number(event.target.value)];
+                          setPicked(next === undefined ? '' : next.id);
+                        },
+                      },
+                      choices.map((choice, choiceIndex) =>
+                        react.createElement(
+                          'option',
+                          { key: choice.id, value: String(choiceIndex) },
+                          choice.id === currentId ? `${choice.label}（当前）` : choice.label,
+                        ),
+                      ),
+                    ),
+                  ),
+                  // 第二行：只对这一个对话开关围栏（不影响别的对话）——浮层过去叫
+                  // 「停用本对话」，设置页也必须有同一个动作，否则两边行为不一致。
+                  // 计数放在这一行，且 nowrap —— 两者都不会再被下拉挤到换行。
+                  react.createElement(
+                    'div',
+                    { className: 'dialog-fence-picker-row' },
+                    targetSession === ''
+                      ? null
+                      : react.createElement(
+                          'button',
+                          {
+                            type: 'button',
+                            className: 'dialog-fence-btn',
+                            disabled: busy,
+                            onClick: () => act(targetSession, 'toggle', { enabled: !(targetEntry?.enabled === true) }),
+                          },
+                          targetEntry?.enabled === true ? '停用该对话' : '启用该对话',
+                        ),
+                    react.createElement(
+                      'span',
+                      { className: 'dialog-fence-count' },
+                      targetSession === '' ? '' : `${targetRules.length}/${targetEntry?.limits?.maxRules ?? 40} 条专属规则`,
+                    ),
+                  ),
                 ),
-                react.createElement(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'dialog-fence-btn',
-                    disabled: busy || targetRules.length === 0,
-                    onClick: () => act(targetSession, 'clear'),
+            targetSession === ''
+              ? null
+              : targetEntry === undefined || targetEntry.limits === undefined
+                ? react.createElement('div', { className: 'dialog-fence-empty' }, '读取中…')
+                : targetRules.length === 0
+                  ? react.createElement('div', { className: 'dialog-fence-empty' }, '这个对话没有专属规则（只用上面的通用规则）。')
+                  : targetRules.map((rule, index) =>
+                      react.createElement(RuleRow, {
+                        key: `page-session-${index}`,
+                        rule,
+                        index,
+                        busy,
+                        onSave: (target, text) => act(targetSession, 'update', { index: target, text }),
+                        onRemove: (target) => act(targetSession, 'remove', { index: target }),
+                        onToggle: (target, enabled) => act(targetSession, 'toggleRule', { index: target, enabled }),
+                      }),
+                    ),
+            targetSession === ''
+              ? null
+              : react.createElement('textarea', {
+                  className: 'dialog-fence-textarea',
+                  rows: 2,
+                  spellCheck: false,
+                  placeholder: '新增一条只作用于所选对话的规则。Ctrl+Enter 添加，可换行。',
+                  value: draftSession,
+                  onChange: (event) => setDraftSession(event.target.value),
+                  onKeyDown: (event) => {
+                    if (event.key === 'Enter' && (event.ctrlKey === true || event.metaKey === true)) {
+                      event.preventDefault();
+                      addSession();
+                    }
                   },
-                  '清空该对话的专属规则',
+                }),
+            targetSession === ''
+              ? null
+              : react.createElement(
+                  'div',
+                  { className: 'dialog-fence-card-head' },
+                  react.createElement(
+                    'button',
+                    { type: 'button', className: 'dialog-fence-btn', 'data-primary': 'true', disabled: busy || draftSession.trim().length === 0, onClick: addSession },
+                    '添加专属规则',
+                  ),
+                  react.createElement(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dialog-fence-btn',
+                      disabled: busy || targetRules.length === 0,
+                      onClick: () => act(targetSession, 'clear'),
+                    },
+                    '清空该对话的专属规则',
+                  ),
+                  react.createElement(
+                    'span',
+                    { className: 'dialog-fence-meta', style: { flex: 1 } },
+                    targetEntry === undefined || targetEntry.limits === undefined
+                      ? ''
+                      : `注入 ${targetEntry.chars ?? 0} 字符 ≈ ${targetEntry.tokens ?? 0} token（仅在叠加通用规则之后）`,
+                  ),
                 ),
-                react.createElement(
-                  'span',
-                  { className: 'dialog-fence-meta', style: { flex: 1 } },
-                  targetEntry === undefined || targetEntry.limits === undefined
-                    ? ''
-                    : `注入 ${targetEntry.chars ?? 0} 字符 ≈ ${targetEntry.tokens ?? 0} token（仅在叠加通用规则之后）`,
+            sessionCount === 0
+              ? null
+              : react.createElement(
+                  'div',
+                  { className: 'dialog-fence-meta' },
+                  `目前有 ${sessionCount} 个对话设置过专属规则（叠加在通用规则之后）。`,
                 ),
-              ),
-          sessionCount === 0
-            ? null
-            : react.createElement(
-                'div',
-                { className: 'dialog-fence-meta' },
-                `目前有 ${sessionCount} 个对话设置过专属规则（叠加在通用规则之后）。`,
-              ),
+          ],
         ),
 
         // ---- 卡片 4：不使用围栏的对话（豁免名单，可多选） ----
-        react.createElement(
-          'div',
-          { className: 'dialog-fence-card' },
+        foldCard(
+          'mute',
           react.createElement(
             'div',
             { className: 'dialog-fence-card-head' },
@@ -1016,69 +1124,78 @@ window.__ModuleLoader__.load({
               { className: 'dialog-fence-count' },
               mutedList.length === 0 ? '当前：全部对话都使用围栏' : `当前：${mutedList.length} 个对话不使用围栏`,
             ),
+            foldButton('mute'),
           ),
-          react.createElement(
-            'div',
-            { className: 'dialog-fence-meta' },
-            '勾选的对话会完全跳过围栏：通用规则和专属规则都不注入，规则本身不会被删掉，取消勾选后原样恢复。默认全都不勾（也就是所有对话都使用围栏）。',
-          ),
-          muteChoices.length === 0
-            ? react.createElement(
-                'div',
-                { className: 'dialog-fence-empty' },
-                overview === null && sessionById === undefined ? '读取中…' : '还没有可选的对话。',
-              )
-            : react.createElement(
-                'div',
-                { className: 'dialog-fence-mute-list' },
-                muteChoices.map((row) => {
-                  const checked = mutedSet.has(row.id);
-                  return react.createElement(
-                    'div',
-                    { key: `mute-${row.id}`, className: 'dialog-fence-mute-row' },
-                    react.createElement('button', {
-                      type: 'button',
-                      className: 'dialog-fence-mute-box',
-                      'data-on': checked ? 'true' : 'false',
-                      role: 'checkbox',
-                      'aria-checked': checked ? 'true' : 'false',
-                      'aria-label': checked ? `让 ${row.label} 重新使用围栏` : `让 ${row.label} 不使用围栏`,
-                      title: checked ? '已豁免，点击恢复使用围栏' : '点击让这个对话不使用围栏',
-                      disabled: busy,
-                      onClick: () => toggleMute(row.id, !checked),
-                    }),
-                    // 名字是唯一允许收缩的元素：超长省略，绝不把右边的标记挤出去。
-                    react.createElement('span', { className: 'dialog-fence-mute-name', title: row.label }, row.label),
-                    checked ? react.createElement('span', { className: 'dialog-fence-mute-tag' }, '不使用围栏') : null,
-                  );
-                }),
+          [
+            react.createElement(
+              'div',
+              { className: 'dialog-fence-meta' },
+              '勾选的对话会完全跳过围栏：通用规则和专属规则都不注入，规则本身不会被删掉，取消勾选后原样恢复。默认全都不勾（也就是所有对话都使用围栏）。',
+            ),
+            muteChoices.length === 0
+              ? react.createElement(
+                  'div',
+                  { className: 'dialog-fence-empty' },
+                  overview === null && sessionById === undefined ? '读取中…' : '还没有可选的对话。',
+                )
+              : react.createElement(
+                  'div',
+                  { className: 'dialog-fence-mute-list' },
+                  muteChoices.map((row) => {
+                    const checked = mutedSet.has(row.id);
+                    return react.createElement(
+                      'div',
+                      { key: `mute-${row.id}`, className: 'dialog-fence-mute-row' },
+                      react.createElement('button', {
+                        type: 'button',
+                        className: 'dialog-fence-mute-box',
+                        'data-on': checked ? 'true' : 'false',
+                        role: 'checkbox',
+                        'aria-checked': checked ? 'true' : 'false',
+                        'aria-label': checked ? `让 ${row.label} 重新使用围栏` : `让 ${row.label} 不使用围栏`,
+                        title: checked ? '已豁免，点击恢复使用围栏' : '点击让这个对话不使用围栏',
+                        disabled: busy,
+                        onClick: () => toggleMute(row.id, !checked),
+                      }),
+                      // 名字是唯一允许收缩的元素：超长省略，绝不把右边的标记挤出去。
+                      react.createElement('span', { className: 'dialog-fence-mute-name', title: row.label }, row.label),
+                      checked ? react.createElement('span', { className: 'dialog-fence-mute-tag' }, '不使用围栏') : null,
+                    );
+                  }),
+                ),
+            react.createElement(
+              'div',
+              { className: 'dialog-fence-mute-tools' },
+              react.createElement(
+                'button',
+                { type: 'button', className: 'dialog-fence-btn', disabled: busy || muteChoices.length === 0, onClick: muteAll },
+                '全部不使用围栏',
               ),
-          react.createElement(
-            'div',
-            { className: 'dialog-fence-mute-tools' },
-            react.createElement(
-              'button',
-              { type: 'button', className: 'dialog-fence-btn', disabled: busy || muteChoices.length === 0, onClick: muteAll },
-              '全部不使用围栏',
+              react.createElement(
+                'button',
+                { type: 'button', className: 'dialog-fence-btn', disabled: busy || mutedList.length === 0, onClick: unmuteAll },
+                '恢复全部使用围栏',
+              ),
             ),
-            react.createElement(
-              'button',
-              { type: 'button', className: 'dialog-fence-btn', disabled: busy || mutedList.length === 0, onClick: unmuteAll },
-              '恢复全部使用围栏',
-            ),
-          ),
+          ],
         ),
 
         // ---- 卡片 5：注入路径说明 ----
-        react.createElement(
-          'div',
-          { className: 'dialog-fence-card' },
-          react.createElement('div', { className: 'dialog-fence-h' }, '接入真实请求的唯一一段文本'),
+        foldCard(
+          'path',
           react.createElement(
             'div',
-            { className: 'dialog-fence-meta' },
-            '围栏注册成运行时上下文的一个段（order 118），落在「Current runtime context」快照里。文本不变时一条消息都不追加；规则变化时只追加一份新快照，历史前缀不被重写，因此不影响 KV 缓存命中。',
+            { className: 'dialog-fence-card-head' },
+            react.createElement('div', { className: 'dialog-fence-h' }, '接入真实请求的唯一一段文本'),
+            foldButton('path'),
           ),
+          [
+            react.createElement(
+              'div',
+              { className: 'dialog-fence-meta' },
+              '围栏注册成运行时上下文的一个段（order 118），落在「Current runtime context」快照里。文本不变时一条消息都不追加；规则变化时只追加一份新快照，历史前缀不被重写，因此不影响 KV 缓存命中。',
+            ),
+          ],
         ),
       );
     }
