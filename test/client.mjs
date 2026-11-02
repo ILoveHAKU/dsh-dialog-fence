@@ -490,6 +490,17 @@ assert.equal(cardBodyCount(FencePage()), 5, 'no stored value means all-expanded'
 // 折叠只是界面偏好：绝不能混进围栏文件或 API 负载。
 assert.doesNotMatch(source, /act\([^)]*folded/, 'folding never becomes a fence field');
 
+// ---- 5.49) 浮层收起时上边缘不许移动（0.15.2，用户 CR-25）----------------------
+// 用户原话：「折叠了以后上面缩下来了，应该是上面不动，下面缩上来」。
+// 面板过去是 bottom:96px 贴底定位：内容一变矮，浏览器就保持底边不动、把顶边往下推，
+// 于是标题栏跟着往下跳。改成贴顶定位后，顶边钉住，高度变化只发生在下边缘。
+const panelRule = (styles[0].textContent.match(/\.dialog-fence-panel\{[^}]*\}/) ?? [''])[0];
+assert.ok(panelRule !== '', 'the panel rule is present in the injected css');
+assert.match(panelRule, /(^|[;{])top:/, 'the panel is anchored to its top edge');
+assert.doesNotMatch(panelRule, /(^|[;{])bottom:/, 'the panel is no longer pinned to the bottom edge');
+assert.doesNotMatch(panelRule, /max-height:72vh/, 'the old viewport-fraction cap cannot overflow once top-anchored');
+assert.match(panelRule, /max-height:calc\(100vh - \d+px\)/, 'the height cap subtracts a top offset instead');
+
 // ---- 5.5) 设置页补上「专属规则」编辑区 + 会话下拉（显示名称，不显示 id）------// 缺陷（用户 CR-17 第 1 条）：设置页第三张卡过去只有两句说明文字，
 // 让用户「去右上角浮层里改」，两处界面不同步。现在两边共用同一份数据与同一套动作。
 assert.match(

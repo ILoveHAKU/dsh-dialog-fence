@@ -300,7 +300,12 @@ window.__ModuleLoader__.load({
       '.dialog-fence-trigger[data-on="true"]{color:var(--dsw-alias-brand-text);border-color:var(--dsw-alias-brand-primary)}',
       '.dialog-fence-badge{min-width:16px;height:16px;padding:0 4px;border-radius:8px;',
       'background:var(--dsw-alias-brand-primary);color:#fff;font-size:11px;line-height:16px;text-align:center}',
-      '.dialog-fence-panel{position:fixed;right:24px;bottom:96px;width:480px;max-height:72vh;display:flex;',
+      // 贴顶定位（0.15.2，用户 CR-25）：过去是 bottom:96px 贴底，内容一变矮，
+      // 浏览器保持底边不动把顶边往下推，折叠后标题栏就往下跳。改钉顶边后，
+      // 高度变化只发生在下边缘 —— 上面不动，下面缩上来。
+      // 高度上限从 72vh 换成 calc(100vh - 120px)：贴顶后 72vh 也放得下，但用「视口减固定偏移」
+      // 才不会在矮视口里顶出屏幕（96px 顶距 + 24px 底距）。
+      '.dialog-fence-panel{position:fixed;right:24px;top:96px;width:480px;max-height:calc(100vh - 120px);display:flex;',
       'flex-direction:column;z-index:60;pointer-events:auto;border-radius:14px;overflow:hidden;',
       'background:var(--dsw-alias-bg-overlay);border:1px solid var(--dsw-alias-border-l2);',
       'box-shadow:0 18px 48px rgba(0,0,0,.28);color:var(--dsw-alias-label-primary);font-size:13px}',
